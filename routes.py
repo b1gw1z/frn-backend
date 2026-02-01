@@ -6,6 +6,7 @@ from models import Donation
 from models import Claim
 from sqlalchemy import func
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from datetime import datetime
 
 @app.route('/api/register', methods=['POST'])
 def register():
@@ -61,24 +62,33 @@ def login():
 
 # --- CREATE DONATION ENDPOINT ---
 @app.route('/api/donations', methods=['POST'])
-@jwt_required()  # <--- 1. Protect this route! (Must have token)
+@jwt_required()
 def create_donation():
     data = request.get_json()
-
-    # 2. Identify the user from the token
     current_user_id = get_jwt_identity()
 
+    # Check required fields
     required_fields = ['title', 'description', 'quantity_kg', 'food_type']
     if not all(field in data for field in required_fields):
         return jsonify({'error': 'Missing required fields'}), 400
+
+    # Parse the expiration date if provided
+    exp_date = None
+    if 'expiration_date' in data:
+        try:
+            # Expecting format like "2026-12-31" or "2026-12-31 15:00:00"
+            exp_date = datetime.fromisoformat(data['expiration_date'])
+        except ValueError:
+            return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
 
     new_donation = Donation(
         title=data['title'],
         description=data['description'],
         quantity_kg=data['quantity_kg'],
         food_type=data['food_type'],
-        donor_id=current_user_id, # <--- 3. Use ID from token automatically
-        status='available'
+        donor_id=current_user_id,
+        status='available',
+        expiration_date=exp_date # <--- Save the date!
     )
 
     try:
@@ -171,3 +181,46 @@ def claim_donation():
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+    
+    # In routes.py
+
+@app.route('/api/admin/verify_user/<int:user_id>', methods=['PATCH'])
+@jwt_required()
+def verify_user(user_id):
+    current_user_id = get_jwt_identity()
+    admin = User.query.get(current_user_id)
+    
+    # Check if the requester is actually an Admin
+    if not admin or admin.role != 'admin':
+        return jsonify({'error': 'Access denied. Admins only.'}), 403
+
+    user_to_verify = User.query.get(user_id)
+    if not user_to_verify:
+        return jsonify({'error': 'User not found'}), 404
+
+    user_to_verify.is_verified = True
+    db.session.commit()
+    
+    return jsonify({'message': f'User {user_to_verify.username} has been verified!'}), 200
+
+# --- ADMIN: VERIFY USER ---
+@app.route('/api/admin/verify/<int:user_id>', methods=['PATCH'])
+@jwt_required()
+def verify_user(user_id):
+    # 1. Check if the requester is an Admin
+    current_user_id = get_jwt_identity()
+    admin_user = User.query.get(current_user_id)
+    
+    if not admin_user or admin_user.role != 'admin':
+        return jsonify({'error': 'Access denied. Admins only.'}), 403
+
+    # 2. Find the user to verify
+    user_to_verify = User.query.get(user_id)
+    if not user_to_verify:
+        return jsonify({'error': 'User not found'}), 404
+
+    # 3. Update status
+    user_to_verify.is_verified = True
+    db.session.commit()
+
+    return jsonify({'message': f'User {user_to_verify.username} is now verified!'}), 200

@@ -18,6 +18,7 @@ class User(UserMixin, db.Model):
 
     donations = db.relationship('Donation', backref='donor', lazy=True)
     claims = db.relationship('Claim', backref='rescuer', lazy=True)
+    is_verified = db.Column(db.Boolean, default=False)
 
 class Donation(db.Model):
     __tablename__ = 'donations'
@@ -32,6 +33,7 @@ class Donation(db.Model):
     created_at = db.Column(db.DateTime, server_default=db.func.now())
     
     claim = db.relationship('Claim', backref='donation', uselist=False)
+    expiration_date = db.Column(db.DateTime, nullable=True)
 
 class Claim(db.Model):
     __tablename__ = 'claims'
