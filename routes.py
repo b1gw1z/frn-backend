@@ -4,6 +4,7 @@ from models import User
 from werkzeug.security import generate_password_hash, check_password_hash 
 from models import Donation
 from models import Claim
+from models import Message
 from sqlalchemy import func
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from datetime import datetime
@@ -206,7 +207,7 @@ def verify_user(user_id):
 # --- ADMIN: VERIFY USER ---
 @app.route('/api/admin/verify/<int:user_id>', methods=['PATCH'])
 @jwt_required()
-def verify_user(user_id):
+def verify_user_alt(user_id):
     # 1. Check if the requester is an Admin
     current_user_id = get_jwt_identity()
     admin_user = User.query.get(current_user_id)
@@ -224,3 +225,60 @@ def verify_user(user_id):
     db.session.commit()
 
     return jsonify({'message': f'User {user_to_verify.username} is now verified!'}), 200
+
+# --- CHAT: SEND MESSAGE ---
+@app.route('/api/messages', methods=['POST'])
+@jwt_required()
+def send_message():
+    data = request.get_json()
+    sender_id = get_jwt_identity()
+
+    if not data.get('receiver_id') or not data.get('donation_id') or not data.get('text'):
+        return jsonify({'error': 'Missing fields'}), 400
+
+    new_msg = Message(
+        sender_id=sender_id,
+        receiver_id=data['receiver_id'],
+        donation_id=data['donation_id'],
+        text=data['text']
+    )
+    db.session.add(new_msg)
+    db.session.commit()
+    return jsonify({'message': 'Message sent!'}), 201
+
+# --- CHAT: GET MESSAGES ---
+@app.route('/api/messages/<int:donation_id>', methods=['GET'])
+@jwt_required()
+def get_messages(donation_id):
+    # Get all messages for a specific donation ID
+    msgs = Message.query.filter_by(donation_id=donation_id).order_by(Message.timestamp).all()
+    
+    output = []
+    for m in msgs:
+        output.append({
+            'sender_id': m.sender_id,
+            'text': m.text,
+            'timestamp': m.timestamp
+        })
+    return jsonify({'messages': output}), 200
+
+# --- ADMIN: ANALYTICS DASHBOARD ---
+@app.route('/api/admin/stats', methods=['GET'])
+@jwt_required()
+def get_stats():
+    # Security Check
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    if not user or user.role != 'admin':
+        return jsonify({'error': 'Admins only'}), 403
+
+    # Calculate Stats
+    total_donations = Donation.query.count()
+    active_claims = Claim.query.count()
+    users_count = User.query.count()
+    
+    return jsonify({
+        'total_donations': total_donations,
+        'successful_claims': active_claims,
+        'total_users': users_count
+    }), 200

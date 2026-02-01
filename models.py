@@ -43,3 +43,13 @@ class Claim(db.Model):
     rescuer_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     claimed_at = db.Column(db.DateTime, server_default=db.func.now())
     picked_up_at = db.Column(db.DateTime, nullable=True)
+    
+    # --- NEW: Message Table  ---
+class Message(db.Model):
+    __tablename__ = 'messages'
+    id = db.Column(db.Integer, primary_key=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    receiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    donation_id = db.Column(db.Integer, db.ForeignKey('donations.id'), nullable=False)
+    text = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, server_default=db.func.now())
