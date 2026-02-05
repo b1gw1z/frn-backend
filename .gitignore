@@ -4,3 +4,7 @@ __pycache__/
 .env
 instance/
 .DS_Store
+
+reset_cloud_db.py
+reset_local_db.py
+setup_cloud.py
