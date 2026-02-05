@@ -13,31 +13,39 @@ from datetime import datetime
 def register():
     data = request.get_json()
 
-    required = ['username', 'email', 'password', 'role', 'latitude', 'longitude']
-    if not all(field in data for field in required):
-        return jsonify({'error': 'Missing required fields'}), 400
+    # 1. Validation: Ensure all fields are present
+    required_fields = ['username', 'email', 'password', 'role', 'latitude', 'longitude', 
+                       'organization_name', 'registration_number', 'business_type']
+    
+    for field in required_fields:
+        if field not in data:
+            return jsonify({'error': f'Missing field: {field}'}), 400
 
-    if User.query.filter_by(email=data['email']).first():
-        return jsonify({'error': 'Email already registered'}), 400
+    # 2. Check if User or Organization already exists
+    if User.query.filter((User.email == data['email']) | (User.registration_number == data['registration_number'])).first():
+        return jsonify({'error': 'Email or Registration Number already exists'}), 400
 
-    hashed_password = generate_password_hash(data['password'])
-
-    # Format location for PostGIS: POINT(longitude latitude)
+    # 3. Create the Business/NGO User
+    # Convert lat/lng to PostGIS Point
+    point = f"POINT({data['longitude']} {data['latitude']})"
+    
     new_user = User(
         username=data['username'],
         email=data['email'],
-        password_hash=hashed_password,
-        role=data['role'],
-        location=f"POINT({data['longitude']} {data['latitude']})" 
+        role=data['role'].lower(),  # 'donor' or 'rescuer'
+        organization_name=data['organization_name'],
+        registration_number=data['registration_number'],
+        business_type=data['business_type'],
+        location=point
     )
+    
+    new_user.set_password(data['password'])
+    
+    # 4. Save to DB
+    db.session.add(new_user)
+    db.session.commit()
 
-    try:
-        db.session.add(new_user)
-        db.session.commit()
-        return jsonify({'message': 'User registered successfully!'}), 201
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+    return jsonify({'message': 'Organization registered successfully!'}), 201
     
 @app.route('/api/login', methods=['POST'])
 def login():

@@ -12,6 +12,10 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     role = db.Column(db.String(20), nullable=False) # 'donor' or 'rescuer'
     password_hash = db.Column(db.String(256), nullable=False)
+    
+    organization_name = db.Column(db.String(150), nullable=False, default="Pending")
+    registration_number = db.Column(db.String(50), unique=True, nullable=False, default="000000") # CAC Number
+    business_type = db.Column(db.String(50), nullable=False, default="NGO") # e.g., 'Restaurant', 'NGO'
 
     # Note: srid=4326 is standard GPS. No 'geography=True' to avoid errors.
     location = db.Column(Geometry(geometry_type='POINT', srid=4326))
