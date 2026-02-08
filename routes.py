@@ -71,7 +71,11 @@ def login():
     user = User.query.filter_by(email=data['email']).first()
 
     if user and check_password_hash(user.password_hash, data['password']):
-        access_token = create_access_token(identity=str(user.id))
+        
+        # 👇 UPDATE THIS SECTION 👇
+        # We now add "claims" (extra info) inside the token so the frontend can read it.
+        additional_claims = {"role": user.role}
+        access_token = create_access_token(identity=str(user.id), additional_claims=additional_claims)
         
         return jsonify({
             'message': 'Login successful!',
