@@ -470,3 +470,112 @@ def get_messages(donation_id):
             'timestamp': m.timestamp
         })
     return jsonify({'messages': output}), 200
+
+# =======================================================
+#  SECTION 8: USER DASHBOARD WIDGETS (Restored)
+# =======================================================
+
+@app.route('/api/donor/stats', methods=['GET'])
+@jwt_required()
+def get_donor_stats():
+    """
+    DONOR DASHBOARD: Returns quick stats for the dashboard widgets.
+    """
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    # 1. Total Donations
+    my_donations_count = Donation.query.filter_by(donor_id=current_user_id).count()
+    
+    # 2. Total Weight
+    total_weight = db.session.query(func.sum(Donation.quantity_kg))\
+        .filter_by(donor_id=current_user_id).scalar() or 0
+        
+    # 3. Active Listings
+    active_listings = Donation.query.filter_by(donor_id=current_user_id, status='available').count()
+
+    return jsonify({
+        'total_donations_count': my_donations_count,
+        'total_kg_donated': round(total_weight, 1),
+        'active_listings': active_listings,
+        'points': user.points,  # <--- Added Gamification
+        'impact_tier': user.impact_tier,
+        'impact_message': f"You have saved {round(total_weight, 1)}kg of food!"
+    }), 200
+
+@app.route('/api/recipient/stats', methods=['GET'])
+@jwt_required()
+def get_recipient_stats():
+    """
+    RECIPIENT DASHBOARD: Returns quick stats for the NGO.
+    """
+    current_user_id = get_jwt_identity()
+    
+    # 1. Total Claims
+    my_claims_count = Claim.query.filter_by(rescuer_id=current_user_id).count()
+    
+    # 2. Total Weight Rescued
+    total_rescued = db.session.query(func.sum(Donation.quantity_kg))\
+        .join(Claim, Claim.donation_id == Donation.id)\
+        .filter(Claim.rescuer_id == current_user_id).scalar() or 0
+
+    return jsonify({
+        'total_claims': my_claims_count,
+        'total_kg_rescued': round(total_rescued, 1),
+        'impact_message': f"Your NGO has distributed {round(total_rescued, 1)}kg of food."
+    }), 200
+    
+    # =======================================================
+#  SECTION 9: UTILITIES & MAINTAINANCE (Missing Pieces)
+# =======================================================
+
+@app.route('/api/profile', methods=['GET'])
+@jwt_required()
+def get_user_profile():
+    """
+    Refreshes user data. 
+    Crucial for React/Next.js apps so data persists on page reload.
+    """
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+        
+    return jsonify({
+        'id': user.id,
+        'email': user.email,
+        'username': user.username,
+        'role': user.role,
+        'organization_name': user.organization_name,
+        'registration_number': user.registration_number,
+        'business_type': user.business_type,
+        'is_verified': user.is_verified,
+        'verification_proof': user.verification_proof,
+        'points': user.points,        # <--- Keeps points synced
+        'impact_tier': user.impact_tier
+    }), 200
+
+@app.route('/api/donations/<int:donation_id>', methods=['DELETE'])
+@jwt_required()
+def delete_donation(donation_id):
+    """
+    Allows a Donor to delete their own listing if it hasn't been claimed yet.
+    """
+    current_user_id = get_jwt_identity()
+    donation = Donation.query.get(donation_id)
+
+    if not donation:
+        return jsonify({'error': 'Donation not found'}), 404
+
+    # Check 1: Do they own it?
+    if str(donation.donor_id) != str(current_user_id):
+        return jsonify({'error': 'Unauthorized. You did not post this.'}), 403
+
+    # Check 2: Is it already claimed?
+    if donation.status != 'available':
+        return jsonify({'error': 'Cannot delete. This item has already been claimed.'}), 400
+
+    db.session.delete(donation)
+    db.session.commit()
+    return jsonify({'message': 'Donation deleted successfully'}), 200

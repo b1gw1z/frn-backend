@@ -11,3 +11,4 @@ setup_cloud.py
 promote_to_admin.py
 reset_db.py
 check_partner.py
+update_cloud_db.py
