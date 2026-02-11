@@ -1,8 +1,10 @@
-from flask import request, jsonify
+import csv
+import io
+from flask import request, jsonify, make_response
 from app import app, db
 from models import User, Donation, Claim, Message
 from werkzeug.security import generate_password_hash, check_password_hash 
-from sqlalchemy import func
+from sqlalchemy import func, desc
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from datetime import datetime
 
@@ -12,30 +14,21 @@ from datetime import datetime
 
 @app.route('/api/register', methods=['POST'])
 def register():
-    """
-    Registers a new Business or NGO.
-    Requires: Email, Password, Organization Name, CAC Number, Proof Link.
-    Default Status: Unverified (Cannot use app until Admin approves).
-    """
     data = request.get_json()
 
     # 1.1 Strict B2B Validation
     required_fields = ['email', 'password', 'role', 'latitude', 'longitude', 
-                       'organization_name', 'registration_number', 'business_type', 
-                       'verification_proof']
+                       'organization_name', 'registration_number', 'business_type']
     
     for field in required_fields:
         if field not in data:
             return jsonify({'error': f'Missing required field: {field}'}), 400
 
-    # 1.2 Prevent Duplicates (Email or CAC Number)
     if User.query.filter((User.email == data['email']) | (User.registration_number == data['registration_number'])).first():
         return jsonify({'error': 'Email or CAC Registration Number already exists'}), 400
 
-    # 1.3 Geospatial Point Creation
     point = f"POINT({data['longitude']} {data['latitude']})"
     
-    # 1.4 Create User (Default: is_verified = False)
     new_user = User(
         username=data['organization_name'], 
         email=data['email'],
@@ -43,9 +36,11 @@ def register():
         organization_name=data['organization_name'],
         registration_number=data['registration_number'],
         business_type=data['business_type'],
-        verification_proof=data['verification_proof'],
+        verification_proof=data.get('verification_proof'),
         location=point,
-        is_verified=False 
+        is_verified=False,
+        points=0,           
+        impact_tier="Newcomer"
     )
     
     new_user.set_password(data['password'])
@@ -60,9 +55,6 @@ def register():
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    """
-    Logs in a user and returns their B2B Profile & Verification Status.
-    """
     data = request.get_json()
 
     if not data or not data.get('email') or not data.get('password'):
@@ -72,9 +64,8 @@ def login():
 
     if user and check_password_hash(user.password_hash, data['password']):
         
-        # 👇 UPDATE THIS SECTION 👇
-        # We now add "claims" (extra info) inside the token so the frontend can read it.
-        additional_claims = {"role": user.role}
+        # Add Role & Org Name to Token
+        additional_claims = {"role": user.role, "org": user.organization_name}
         access_token = create_access_token(identity=str(user.id), additional_claims=additional_claims)
         
         return jsonify({
@@ -87,8 +78,9 @@ def login():
                 'organization_name': user.organization_name, 
                 'business_type': user.business_type,         
                 'registration_number': user.registration_number,
-                'is_verified': user.is_verified,  # <--- CRITICAL: Frontend checks this
-                'verification_proof': user.verification_proof 
+                'is_verified': user.is_verified, 
+                'points': user.points,        # <--- Gamification Points
+                'impact_tier': user.impact_tier # <--- Rank (Gold, Silver, etc.)
             }
         }), 200
     else:
@@ -96,7 +88,33 @@ def login():
 
 
 # =======================================================
-#  SECTION 2: REAL-TIME MONITORING & DASHBOARDS
+#  SECTION 2: GAMIFICATION & LEADERBOARDS (New!)
+# =======================================================
+
+@app.route('/api/leaderboard', methods=['GET'])
+def get_leaderboard():
+    """
+    Returns the Top 10 Donors based on points.
+    Used for the 'Gamification' widget on the dashboard.
+    """
+    # Get top 10 donors ordered by points (Highest first)
+    top_donors = User.query.filter_by(role='donor')\
+        .order_by(desc(User.points))\
+        .limit(10).all()
+        
+    results = []
+    for user in top_donors:
+        results.append({
+            'organization_name': user.organization_name,
+            'points': user.points,
+            'tier': user.impact_tier,
+            'business_type': user.business_type
+        })
+    return jsonify(results), 200
+
+
+# =======================================================
+#  SECTION 3: REAL-TIME ANALYTICS & DASHBOARDS
 # =======================================================
 
 @app.route('/api/admin/stats', methods=['GET'])
@@ -104,7 +122,7 @@ def login():
 def get_admin_stats():
     """
     ADMIN DASHBOARD: Returns system-wide live metrics.
-    Used by the Admin Panel to show "Total Food Rescued", "Pending Users", etc.
+    Now includes breakdown of Donors vs Recipients.
     """
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
@@ -112,119 +130,26 @@ def get_admin_stats():
     if not user or user.role != 'admin':
         return jsonify({'error': 'Admins only'}), 403
 
-    # Calculate total weight of food rescued
     total_kg = db.session.query(func.sum(Donation.quantity_kg)).scalar() or 0
+    
+    # Breakdown of users
+    donor_count = User.query.filter_by(role='donor').count()
+    recipient_count = User.query.filter_by(role='rescuer').count()
 
     return jsonify({
+        'total_food_rescued_kg': round(total_kg, 1),
         'total_donations': Donation.query.count(),
         'successful_claims': Claim.query.count(),
         'total_users': User.query.count(),
-        'pending_verifications': User.query.filter_by(is_verified=False).count(),
-        'total_food_rescued_kg': round(total_kg, 1)
+        'user_breakdown': {
+            'donors': donor_count,
+            'recipients': recipient_count
+        },
+        'pending_verifications': User.query.filter_by(is_verified=False).count()
     }), 200
 
-@app.route('/api/donor/stats', methods=['GET'])
-@jwt_required()
-def get_donor_stats():
-    """
-    DONOR DASHBOARD: Returns CSR impact data for the specific business.
-    """
-    current_user_id = get_jwt_identity()
-    
-    # 1. Total Donations by this donor
-    my_donations = Donation.query.filter_by(donor_id=current_user_id).count()
-    
-    # 2. Total Weight Donated
-    total_weight = db.session.query(func.sum(Donation.quantity_kg))\
-        .filter_by(donor_id=current_user_id).scalar() or 0
-        
-    # 3. Active Listings
-    active_listings = Donation.query.filter_by(donor_id=current_user_id, status='available').count()
-
-    return jsonify({
-        'total_donations_count': my_donations,
-        'total_kg_donated': round(total_weight, 1),
-        'active_listings': active_listings,
-        'impact_message': f"You have saved {round(total_weight, 1)}kg of food from going to waste!"
-    }), 200
-
-@app.route('/api/recipient/stats', methods=['GET'])
-@jwt_required()
-def get_recipient_stats():
-    """
-    RECIPIENT DASHBOARD: Returns impact data for the NGO.
-    """
-    current_user_id = get_jwt_identity()
-    
-    my_claims_count = Claim.query.filter_by(rescuer_id=current_user_id).count()
-    
-    total_rescued = db.session.query(func.sum(Donation.quantity_kg))\
-        .join(Claim, Claim.donation_id == Donation.id)\
-        .filter(Claim.rescuer_id == current_user_id).scalar() or 0
-
-    return jsonify({
-        'total_claims': my_claims_count,
-        'total_kg_rescued': round(total_rescued, 1),
-        'impact_message': f"Your NGO has distributed {round(total_rescued, 1)}kg of food to the needy."
-    }), 200
-
-
 # =======================================================
-#  SECTION 3: ADMIN VERIFICATION TOOLS
-# =======================================================
-
-@app.route('/api/admin/pending-users', methods=['GET'])
-@jwt_required()
-def get_pending_users():
-    """
-    Returns a list of all users where is_verified = False.
-    Admin uses this to see who needs approval.
-    """
-    current_user_id = get_jwt_identity()
-    admin = User.query.get(current_user_id)
-    
-    if not admin or admin.role != 'admin':
-        return jsonify({'error': 'Access denied. Admins only.'}), 403
-
-    pending = User.query.filter_by(is_verified=False).all()
-    
-    output = []
-    for u in pending:
-        output.append({
-            'id': u.id,
-            'organization_name': u.organization_name,
-            'registration_number': u.registration_number,
-            'email': u.email,
-            'business_type': u.business_type,
-            'verification_proof': u.verification_proof # Admin clicks this link to check doc
-        })
-
-    return jsonify(output), 200
-
-@app.route('/api/admin/verify/<int:user_id>', methods=['PATCH'])
-@jwt_required()
-def verify_user(user_id):
-    """
-    Admin clicks "Approve" -> This endpoint sets is_verified = True.
-    """
-    current_user_id = get_jwt_identity()
-    admin = User.query.get(current_user_id)
-    
-    if not admin or admin.role != 'admin':
-        return jsonify({'error': 'Access denied. Admins only.'}), 403
-
-    user_to_verify = User.query.get(user_id)
-    if not user_to_verify:
-        return jsonify({'error': 'User not found'}), 404
-
-    user_to_verify.is_verified = True
-    db.session.commit()
-
-    return jsonify({'message': f'{user_to_verify.organization_name} has been verified!'}), 200
-
-
-# =======================================================
-#  SECTION 4: DONATION MANAGEMENT (GEO-SEARCH)
+#  SECTION 4: DONATION MANAGEMENT (With Images & Tags)
 # =======================================================
 
 @app.route('/api/donations', methods=['POST'])
@@ -232,11 +157,11 @@ def verify_user(user_id):
 def create_donation():
     """
     Allows Verified Donors to post food.
+    Calculates Points and Updates Tier automatically.
     """
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
 
-    # 4.1 SECURITY: Check Verification
     if not user.is_verified:
         return jsonify({'error': 'Account not verified. You cannot post donations yet.'}), 403
 
@@ -249,6 +174,23 @@ def create_donation():
     if not all(field in data for field in required_fields):
         return jsonify({'error': 'Missing required fields'}), 400
 
+    # --- GAMIFICATION LOGIC ---
+    # Rule: 1kg = 10 Points [Reflects amount given]
+    try:
+        kg_amount = float(data['quantity_kg'])
+        points_earned = int(kg_amount * 10)
+        user.points += points_earned
+        
+        # Update Tier based on new total
+        if user.points >= 5000: user.impact_tier = "Sapphire"
+        elif user.points >= 2000: user.impact_tier = "Gold"
+        elif user.points >= 500: user.impact_tier = "Silver"
+        else: user.impact_tier = "Bronze"
+        
+    except ValueError:
+        return jsonify({'error': 'Quantity must be a number'}), 400
+    # --------------------------
+
     exp_date = None
     if 'expiration_date' in data:
         try:
@@ -259,8 +201,11 @@ def create_donation():
     new_donation = Donation(
         title=data['title'],
         description=data['description'],
-        quantity_kg=data['quantity_kg'],
+        quantity_kg=kg_amount,
         food_type=data['food_type'],
+        # New Fields
+        tags=data.get('tags', ''),       # e.g. "Vegetarian, Halal"
+        image_url=data.get('image_url'), # URL to image
         donor_id=current_user_id,
         status='available',
         expiration_date=exp_date
@@ -269,7 +214,11 @@ def create_donation():
     try:
         db.session.add(new_donation)
         db.session.commit()
-        return jsonify({'message': 'Donation posted successfully!', 'donation_id': new_donation.id}), 201
+        return jsonify({
+            'message': f'Donation posted! You earned {points_earned} points.',
+            'new_tier': user.impact_tier,
+            'donation_id': new_donation.id
+        }), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -277,16 +226,13 @@ def create_donation():
 @app.route('/api/donations', methods=['GET'])
 def get_donations():
     """
-    Returns available donations.
-    If lat/lng provided: Sorts by distance (Nearest First).
-    If no lat/lng: Returns list by date.
+    Returns available donations with Images and Tags.
     """
     lat = request.args.get('lat', type=float)
     lng = request.args.get('lng', type=float)
     results = []
 
     if lat and lng:
-        # 4.2 Geospatial Search (PostGIS)
         rescuer_location = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
         
         donations_with_dist = db.session.query(
@@ -301,12 +247,13 @@ def get_donations():
                 'description': donation.description,
                 'quantity_kg': donation.quantity_kg,
                 'food_type': donation.food_type,
+                'tags': donation.tags,           # <--- Added
+                'image_url': donation.image_url, # <--- Added
                 'organization_name': donation.donor.organization_name,
                 'expiration_date': donation.expiration_date,
                 'distance_km': round(distance_meters / 1000, 2)
             })
     else:
-        # 4.3 Standard List
         donations = Donation.query.filter_by(status='available').all()
         for donation in donations:
             results.append({
@@ -315,6 +262,9 @@ def get_donations():
                 'description': donation.description,
                 'organization_name': donation.donor.organization_name,
                 'quantity_kg': donation.quantity_kg,
+                'food_type': donation.food_type,
+                'tags': donation.tags,           # <--- Added
+                'image_url': donation.image_url, # <--- Added
                 'distance_km': None
             })
 
@@ -322,20 +272,16 @@ def get_donations():
 
 
 # =======================================================
-#  SECTION 5: CLAIMS & MESSAGING
+#  SECTION 5: CLAIMS & VERIFICATION
 # =======================================================
 
 @app.route('/api/claim', methods=['POST'])
 @jwt_required()
 def claim_donation():
-    """
-    Allows Verified Recipients to claim food.
-    """
     data = request.get_json()
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
 
-    # 5.1 SECURITY: Check Verification
     if not user.is_verified:
         return jsonify({'error': 'Account not verified. You cannot claim food yet.'}), 403
 
@@ -364,6 +310,134 @@ def claim_donation():
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/admin/pending-users', methods=['GET'])
+@jwt_required()
+def get_pending_users():
+    current_user_id = get_jwt_identity()
+    admin = User.query.get(current_user_id)
+    
+    if not admin or admin.role != 'admin':
+        return jsonify({'error': 'Access denied. Admins only.'}), 403
+
+    pending = User.query.filter_by(is_verified=False).all()
+    
+    output = []
+    for u in pending:
+        output.append({
+            'id': u.id,
+            'organization_name': u.organization_name,
+            'registration_number': u.registration_number,
+            'email': u.email,
+            'business_type': u.business_type,
+            'verification_proof': u.verification_proof
+        })
+
+    return jsonify(output), 200
+
+@app.route('/api/admin/verify/<int:user_id>', methods=['PATCH'])
+@jwt_required()
+def verify_user(user_id):
+    current_user_id = get_jwt_identity()
+    admin = User.query.get(current_user_id)
+    
+    if not admin or admin.role != 'admin':
+        return jsonify({'error': 'Access denied. Admins only.'}), 403
+
+    user_to_verify = User.query.get(user_id)
+    if not user_to_verify:
+        return jsonify({'error': 'User not found'}), 404
+
+    user_to_verify.is_verified = True
+    db.session.commit()
+
+    return jsonify({'message': f'{user_to_verify.organization_name} has been verified!'}), 200
+
+
+# =======================================================
+#  SECTION 6: HISTORY & REPORTS (New!)
+# =======================================================
+
+@app.route('/api/history', methods=['GET'])
+@jwt_required()
+def get_user_history():
+    """
+    Returns a JSON list of all past activities for the logged-in user.
+    - Donors see what they gave.
+    - Rescuers see what they claimed.
+    """
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    history = []
+    
+    if user.role == 'donor':
+        # Get all donations made by this user
+        donations = Donation.query.filter_by(donor_id=current_user_id).order_by(desc(Donation.created_at)).all()
+        for d in donations:
+            history.append({
+                'date': d.created_at.strftime('%Y-%m-%d'),
+                'title': d.title,
+                'quantity_kg': d.quantity_kg,
+                'food_type': d.food_type,
+                'status': d.status
+            })
+            
+    elif user.role == 'rescuer':
+        # Get all claims made by this user
+        claims = db.session.query(Claim, Donation).join(Donation).filter(Claim.rescuer_id == current_user_id).all()
+        for claim, donation in claims:
+            history.append({
+                'date': claim.claimed_at.strftime('%Y-%m-%d'),
+                'title': donation.title,
+                'quantity_kg': donation.quantity_kg,
+                'food_type': donation.food_type,
+                'donor_name': donation.donor.organization_name
+            })
+            
+    return jsonify(history), 200
+
+@app.route('/api/report/download', methods=['GET'])
+@jwt_required()
+def download_report():
+    """
+    Generates and downloads a CSV file of the user's history.
+    Useful for 'Analysis' and 'Reporting'.
+    """
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    # 1. Create a CSV in memory
+    si = io.StringIO()
+    cw = csv.writer(si)
+    
+    if user.role == 'donor':
+        # Write Header
+        cw.writerow(['Date', 'Title', 'Quantity (KG)', 'Food Type', 'Status', 'Impact Points'])
+        # Write Data
+        donations = Donation.query.filter_by(donor_id=current_user_id).all()
+        for d in donations:
+            points = int(d.quantity_kg * 10)
+            cw.writerow([d.created_at.strftime('%Y-%m-%d'), d.title, d.quantity_kg, d.food_type, d.status, points])
+            
+    elif user.role == 'rescuer':
+        # Write Header
+        cw.writerow(['Claim Date', 'Title', 'Quantity (KG)', 'Food Type', 'Donor Organization'])
+        # Write Data
+        claims = db.session.query(Claim, Donation).join(Donation).filter(Claim.rescuer_id == current_user_id).all()
+        for claim, donation in claims:
+            cw.writerow([claim.claimed_at.strftime('%Y-%m-%d'), donation.title, donation.quantity_kg, donation.food_type, donation.donor.organization_name])
+
+    # 2. Create Response as a File Download
+    output = make_response(si.getvalue())
+    output.headers["Content-Disposition"] = f"attachment; filename={user.organization_name}_report.csv"
+    output.headers["Content-type"] = "text/csv"
+    return output
+
+
+# =======================================================
+#  SECTION 7: MESSAGING
+# =======================================================
 
 @app.route('/api/messages', methods=['POST'])
 @jwt_required()
