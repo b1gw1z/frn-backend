@@ -27,6 +27,7 @@ def register():
     if User.query.filter((User.email == data['email']) | (User.registration_number == data['registration_number'])).first():
         return jsonify({'error': 'Email or CAC Registration Number already exists'}), 400
 
+    # Create Point for PostGIS
     point = f"POINT({data['longitude']} {data['latitude']})"
     
     new_user = User(
@@ -79,8 +80,8 @@ def login():
                 'business_type': user.business_type,         
                 'registration_number': user.registration_number,
                 'is_verified': user.is_verified, 
-                'points': user.points,        # <--- Gamification Points
-                'impact_tier': user.impact_tier # <--- Rank (Gold, Silver, etc.)
+                'points': user.points,        
+                'impact_tier': user.impact_tier
             }
         }), 200
     else:
@@ -88,16 +89,12 @@ def login():
 
 
 # =======================================================
-#  SECTION 2: GAMIFICATION & LEADERBOARDS (New!)
+#  SECTION 2: GAMIFICATION & LEADERBOARDS
 # =======================================================
 
 @app.route('/api/leaderboard', methods=['GET'])
 def get_leaderboard():
-    """
-    Returns the Top 10 Donors based on points.
-    Used for the 'Gamification' widget on the dashboard.
-    """
-    # Get top 10 donors ordered by points (Highest first)
+    """ Returns Top 10 Donors based on points. """
     top_donors = User.query.filter_by(role='donor')\
         .order_by(desc(User.points))\
         .limit(10).all()
@@ -114,16 +111,13 @@ def get_leaderboard():
 
 
 # =======================================================
-#  SECTION 3: REAL-TIME ANALYTICS & DASHBOARDS
+#  SECTION 3: ADMIN DASHBOARD (System Stats)
 # =======================================================
 
 @app.route('/api/admin/stats', methods=['GET'])
 @jwt_required()
 def get_admin_stats():
-    """
-    ADMIN DASHBOARD: Returns system-wide live metrics.
-    Now includes breakdown of Donors vs Recipients.
-    """
+    """ Returns system-wide live metrics. """
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
     
@@ -132,7 +126,6 @@ def get_admin_stats():
 
     total_kg = db.session.query(func.sum(Donation.quantity_kg)).scalar() or 0
     
-    # Breakdown of users
     donor_count = User.query.filter_by(role='donor').count()
     recipient_count = User.query.filter_by(role='rescuer').count()
 
@@ -149,16 +142,12 @@ def get_admin_stats():
     }), 200
 
 # =======================================================
-#  SECTION 4: DONATION MANAGEMENT (With Images & Tags)
+#  SECTION 4: DONATION MANAGEMENT (Map Enabled!)
 # =======================================================
 
 @app.route('/api/donations', methods=['POST'])
 @jwt_required()
 def create_donation():
-    """
-    Allows Verified Donors to post food.
-    Calculates Points and Updates Tier automatically.
-    """
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
 
@@ -174,14 +163,13 @@ def create_donation():
     if not all(field in data for field in required_fields):
         return jsonify({'error': 'Missing required fields'}), 400
 
-    # --- GAMIFICATION LOGIC ---
-    # Rule: 1kg = 10 Points [Reflects amount given]
+    # --- GAMIFICATION LOGIC (1kg = 10 Points) ---
     try:
         kg_amount = float(data['quantity_kg'])
         points_earned = int(kg_amount * 10)
         user.points += points_earned
         
-        # Update Tier based on new total
+        # Update Tier
         if user.points >= 5000: user.impact_tier = "Sapphire"
         elif user.points >= 2000: user.impact_tier = "Gold"
         elif user.points >= 500: user.impact_tier = "Silver"
@@ -189,7 +177,6 @@ def create_donation():
         
     except ValueError:
         return jsonify({'error': 'Quantity must be a number'}), 400
-    # --------------------------
 
     exp_date = None
     if 'expiration_date' in data:
@@ -203,9 +190,8 @@ def create_donation():
         description=data['description'],
         quantity_kg=kg_amount,
         food_type=data['food_type'],
-        # New Fields
-        tags=data.get('tags', ''),       # e.g. "Vegetarian, Halal"
-        image_url=data.get('image_url'), # URL to image
+        tags=data.get('tags', ''),
+        image_url=data.get('image_url'),
         donor_id=current_user_id,
         status='available',
         expiration_date=exp_date
@@ -226,15 +212,18 @@ def create_donation():
 @app.route('/api/donations', methods=['GET'])
 def get_donations():
     """
-    Returns available donations with Images and Tags.
+    Returns available donations.
+    ✅ Distance Sorting ENABLED (Requires PostGIS from Step 2)
     """
     lat = request.args.get('lat', type=float)
     lng = request.args.get('lng', type=float)
     results = []
 
     if lat and lng:
+        # Create a geometry point for the rescuer
         rescuer_location = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
         
+        # Calculate distance using PostGIS
         donations_with_dist = db.session.query(
             Donation, 
             func.ST_DistanceSphere(User.location, rescuer_location).label('distance')
@@ -247,13 +236,18 @@ def get_donations():
                 'description': donation.description,
                 'quantity_kg': donation.quantity_kg,
                 'food_type': donation.food_type,
-                'tags': donation.tags,           # <--- Added
-                'image_url': donation.image_url, # <--- Added
+                'tags': donation.tags,
+                'image_url': donation.image_url,
                 'organization_name': donation.donor.organization_name,
                 'expiration_date': donation.expiration_date,
                 'distance_km': round(distance_meters / 1000, 2)
             })
+        
+        # Sort results by distance (closest first)
+        results.sort(key=lambda x: x['distance_km'])
+        
     else:
+        # Fallback if no location provided
         donations = Donation.query.filter_by(status='available').all()
         for donation in donations:
             results.append({
@@ -262,9 +256,8 @@ def get_donations():
                 'description': donation.description,
                 'organization_name': donation.donor.organization_name,
                 'quantity_kg': donation.quantity_kg,
-                'food_type': donation.food_type,
-                'tags': donation.tags,           # <--- Added
-                'image_url': donation.image_url, # <--- Added
+                'tags': donation.tags,
+                'image_url': donation.image_url,
                 'distance_km': None
             })
 
@@ -355,24 +348,18 @@ def verify_user(user_id):
 
 
 # =======================================================
-#  SECTION 6: HISTORY & REPORTS (New!)
+#  SECTION 6: HISTORY & REPORTS
 # =======================================================
 
 @app.route('/api/history', methods=['GET'])
 @jwt_required()
 def get_user_history():
-    """
-    Returns a JSON list of all past activities for the logged-in user.
-    - Donors see what they gave.
-    - Rescuers see what they claimed.
-    """
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
     
     history = []
     
     if user.role == 'donor':
-        # Get all donations made by this user
         donations = Donation.query.filter_by(donor_id=current_user_id).order_by(desc(Donation.created_at)).all()
         for d in donations:
             history.append({
@@ -384,7 +371,6 @@ def get_user_history():
             })
             
     elif user.role == 'rescuer':
-        # Get all claims made by this user
         claims = db.session.query(Claim, Donation).join(Donation).filter(Claim.rescuer_id == current_user_id).all()
         for claim, donation in claims:
             history.append({
@@ -400,35 +386,26 @@ def get_user_history():
 @app.route('/api/report/download', methods=['GET'])
 @jwt_required()
 def download_report():
-    """
-    Generates and downloads a CSV file of the user's history.
-    Useful for 'Analysis' and 'Reporting'.
-    """
+    """ Generates CSV report. """
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
     
-    # 1. Create a CSV in memory
     si = io.StringIO()
     cw = csv.writer(si)
     
     if user.role == 'donor':
-        # Write Header
         cw.writerow(['Date', 'Title', 'Quantity (KG)', 'Food Type', 'Status', 'Impact Points'])
-        # Write Data
         donations = Donation.query.filter_by(donor_id=current_user_id).all()
         for d in donations:
             points = int(d.quantity_kg * 10)
             cw.writerow([d.created_at.strftime('%Y-%m-%d'), d.title, d.quantity_kg, d.food_type, d.status, points])
             
     elif user.role == 'rescuer':
-        # Write Header
         cw.writerow(['Claim Date', 'Title', 'Quantity (KG)', 'Food Type', 'Donor Organization'])
-        # Write Data
         claims = db.session.query(Claim, Donation).join(Donation).filter(Claim.rescuer_id == current_user_id).all()
         for claim, donation in claims:
             cw.writerow([claim.claimed_at.strftime('%Y-%m-%d'), donation.title, donation.quantity_kg, donation.food_type, donation.donor.organization_name])
 
-    # 2. Create Response as a File Download
     output = make_response(si.getvalue())
     output.headers["Content-Disposition"] = f"attachment; filename={user.organization_name}_report.csv"
     output.headers["Content-type"] = "text/csv"
@@ -472,33 +449,28 @@ def get_messages(donation_id):
     return jsonify({'messages': output}), 200
 
 # =======================================================
-#  SECTION 8: USER DASHBOARD WIDGETS (Restored)
+#  SECTION 8: DASHBOARD WIDGETS
 # =======================================================
 
 @app.route('/api/donor/stats', methods=['GET'])
 @jwt_required()
 def get_donor_stats():
-    """
-    DONOR DASHBOARD: Returns quick stats for the dashboard widgets.
-    """
+    """ DONOR DASHBOARD: Returns quick stats. """
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
     
-    # 1. Total Donations
     my_donations_count = Donation.query.filter_by(donor_id=current_user_id).count()
     
-    # 2. Total Weight
     total_weight = db.session.query(func.sum(Donation.quantity_kg))\
         .filter_by(donor_id=current_user_id).scalar() or 0
         
-    # 3. Active Listings
     active_listings = Donation.query.filter_by(donor_id=current_user_id, status='available').count()
 
     return jsonify({
         'total_donations_count': my_donations_count,
         'total_kg_donated': round(total_weight, 1),
         'active_listings': active_listings,
-        'points': user.points,  # <--- Added Gamification
+        'points': user.points,
         'impact_tier': user.impact_tier,
         'impact_message': f"You have saved {round(total_weight, 1)}kg of food!"
     }), 200
@@ -506,15 +478,11 @@ def get_donor_stats():
 @app.route('/api/recipient/stats', methods=['GET'])
 @jwt_required()
 def get_recipient_stats():
-    """
-    RECIPIENT DASHBOARD: Returns quick stats for the NGO.
-    """
+    """ RECIPIENT DASHBOARD: Returns quick stats. """
     current_user_id = get_jwt_identity()
     
-    # 1. Total Claims
     my_claims_count = Claim.query.filter_by(rescuer_id=current_user_id).count()
     
-    # 2. Total Weight Rescued
     total_rescued = db.session.query(func.sum(Donation.quantity_kg))\
         .join(Claim, Claim.donation_id == Donation.id)\
         .filter(Claim.rescuer_id == current_user_id).scalar() or 0
@@ -524,18 +492,16 @@ def get_recipient_stats():
         'total_kg_rescued': round(total_rescued, 1),
         'impact_message': f"Your NGO has distributed {round(total_rescued, 1)}kg of food."
     }), 200
-    
-    # =======================================================
-#  SECTION 9: UTILITIES & MAINTAINANCE (Missing Pieces)
+
+
+# =======================================================
+#  SECTION 9: UTILITIES (Refreshes & Deletes)
 # =======================================================
 
 @app.route('/api/profile', methods=['GET'])
 @jwt_required()
 def get_user_profile():
-    """
-    Refreshes user data. 
-    Crucial for React/Next.js apps so data persists on page reload.
-    """
+    """ Refreshes user data on page reload. """
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
     
@@ -552,27 +518,23 @@ def get_user_profile():
         'business_type': user.business_type,
         'is_verified': user.is_verified,
         'verification_proof': user.verification_proof,
-        'points': user.points,        # <--- Keeps points synced
+        'points': user.points,        
         'impact_tier': user.impact_tier
     }), 200
 
 @app.route('/api/donations/<int:donation_id>', methods=['DELETE'])
 @jwt_required()
 def delete_donation(donation_id):
-    """
-    Allows a Donor to delete their own listing if it hasn't been claimed yet.
-    """
+    """ Allows Donors to delete unclaimed listings. """
     current_user_id = get_jwt_identity()
     donation = Donation.query.get(donation_id)
 
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404
 
-    # Check 1: Do they own it?
     if str(donation.donor_id) != str(current_user_id):
         return jsonify({'error': 'Unauthorized. You did not post this.'}), 403
 
-    # Check 2: Is it already claimed?
     if donation.status != 'available':
         return jsonify({'error': 'Cannot delete. This item has already been claimed.'}), 400
 
