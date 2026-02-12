@@ -22,3 +22,4 @@ python-dotenv
 SQLAlchemy
 typing_extensions
 Werkzeug
+Flask-Mail
