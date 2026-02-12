@@ -4,8 +4,8 @@ from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 from sqlalchemy.orm import deferred  # <--- NEW IMPORT
+from app import db
 
-db = SQLAlchemy()
 
 # ==========================================
 #  1. USER MODEL
@@ -32,11 +32,12 @@ class User(UserMixin, db.Model):
     is_verified = db.Column(db.Boolean, default=False)
     verification_proof = db.Column(db.String(255), nullable=True)
     
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
     # --- GEOLOCATION (LAZY LOADED) ---
-    # We wrap this in 'deferred()' so it is NOT loaded during login.
-    # It will only load when we explicitly use it (like in the map search).
-    location = deferred(db.Column(Geometry(geometry_type='POINT', srid=4326)))
-
+   
+    location = db.Column(Geometry(geometry_type='POINT', srid=4326))
+    
     donations = db.relationship('Donation', backref='donor', lazy=True)
     claims = db.relationship('Claim', backref='rescuer', lazy=True)
 
