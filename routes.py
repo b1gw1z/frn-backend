@@ -85,7 +85,46 @@ def login():
             }
         }), 200
     else:
-        return jsonify({'error': 'Invalid email or password'}), 401    
+        return jsonify({'error': 'Invalid email or password'}), 401   
+    
+    # -------------------------------------------------------
+#  STEP 1: ADMIN MANUAL RESET (Fail-Safe)
+# -------------------------------------------------------
+@app.route('/api/admin/reset-password', methods=['POST'])
+@jwt_required()
+def admin_reset_password():
+    """
+    Allows the Super Admin to force-reset any user's password.
+    Use this if the email system fails or for immediate support.
+    """
+    current_user_id = get_jwt_identity()
+    admin = User.query.get(current_user_id)
+    
+    # 1. Security Check: Only Admins can do this
+    if not admin or admin.role != 'admin':
+        return jsonify({'error': 'Access Denied. Only Admins can reset passwords manually.'}), 403
+        
+    data = request.get_json()
+    user_email = data.get('email')
+    new_temp_password = data.get('new_password')
+    
+    if not user_email or not new_temp_password:
+        return jsonify({'error': 'Please provide the user email and the new password.'}), 400
+        
+    # 2. Find the User
+    user_to_fix = User.query.filter_by(email=user_email).first()
+    
+    if not user_to_fix:
+        return jsonify({'error': 'User with that email was not found.'}), 404
+        
+    # 3. Update the Password
+    user_to_fix.set_password(new_temp_password)
+    db.session.commit()
+    
+    return jsonify({
+        'message': f'SUCCESS! Password for {user_email} has been reset.',
+        'note': 'Please tell the user to login with this new password immediately.'
+    }), 200 
 
 
 # =======================================================
