@@ -1,18 +1,17 @@
 import os
 import psycopg2
 from app import app, db
-from flask_migrate import upgrade
 from models import User
 
 def deploy():
     """
-    Master Deployment Script
+    Simplified Deployment Script
     1. Enables PostGIS
-    2. Upgrades Database (Fixes the RuntimeError by using app_context)
+    2. Directly Creates Tables (Bypassing broken migrations)
     3. Seeds Admin User
     """
     
-    # --- PART 1: ENABLE POSTGIS (Raw Connection) ---
+    # --- PART 1: ENABLE POSTGIS ---
     print("🌍 1. Checking PostGIS Extension...")
     db_url = os.getenv('DATABASE_URL')
     if db_url:
@@ -25,18 +24,18 @@ def deploy():
             conn.close()
             print("✅ PostGIS Enabled.")
         except Exception as e:
-            print(f"⚠️ PostGIS Warning (might already be on): {e}")
+            print(f"⚠️ PostGIS Warning: {e}")
 
-    # --- PART 2 & 3: FLASK CONTEXT OPERATIONS ---
-    # We use 'with app.app_context():' to FIX the RuntimeError
+    # --- PART 2: CREATE TABLES & SEED ADMIN ---
+    # We use app_context to access the database safely
     with app.app_context():
         
-        # Run Migrations
-        print("🔄 2. Running Database Migrations...")
-        upgrade() # This is the manual version of 'flask db upgrade'
-        print("✅ Migrations Success!")
+        # A. Create Tables
+        print("🏗️ 2. Creating Database Tables...")
+        db.create_all()  # <--- The Magic Line (No more migration errors)
+        print("✅ Tables Created Successfully!")
 
-        # Seed Admin
+        # B. Seed Admin
         print("🌱 3. Seeding Admin User...")
         email = 'admin@frn.org'
         if not User.query.filter_by(email=email).first():
