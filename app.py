@@ -6,6 +6,7 @@ from flask_jwt_extended import JWTManager
 from flask_mail import Mail
 import os
 from dotenv import load_dotenv
+import re  
 
 load_dotenv()
 
@@ -35,16 +36,13 @@ mail = Mail(app)
 CORS(app, resources={
     r"/*": {
         "origins": [
-            "http://localhost:3000",              # Local Development
-            "https://frn-nigeria.vercel.app",     # Main Production Domain
-            "https://food-rescue-network.vercel.app" # Old Domain (Optional)
+            "http://localhost:3000",
+            "https://frn-nigeria.vercel.app",
+            "https://food-rescue-network.vercel.app",
+            
+            # THE FIX: This allows ANY Vercel Preview URL securely
+            re.compile(r"^https://.*\.vercel\.app$") 
         ],
-        # ---------------------------------------------------------
-        # THE FIX: Allow any Vercel Preview URL using Regex
-        # This matches https://ANYTHING.vercel.app
-        # ---------------------------------------------------------
-        "origin_regex": r"https://.*\.vercel\.app.*", 
-        
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
         "supports_credentials": True
