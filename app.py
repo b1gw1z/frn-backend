@@ -25,33 +25,28 @@ app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
 app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_USERNAME')
 
 # --- INITIALIZE EXTENSIONS ---
-
-# 1. DATABASE & MIGRATIONS
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
+jwt = JWTManager(app)
+mail = Mail(app)
 
-# 2. CORS (UPDATED FOR VERCEL)
-# This allows: Localhost, Your Main Domain, and ANY Vercel Preview URL
+# --- CORS CONFIGURATION (THE FIX) ---
+# We changed "/api/*" to "/*" to match ALL routes.
 CORS(app, resources={
-    r"/api/*": {
+    r"/*": {
         "origins": [
             "http://localhost:3000",
             "https://frn-nigeria.vercel.app",
             "https://food-rescue-network.vercel.app"
         ],
-        # The line below allows your partner's long preview URLs to work automatically
+        # This allows ANY Vercel preview URL (like the one your partner is using)
         "origin_regex": r"https://.*\.vercel\.app.*",
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
 })
 
-# 3. AUTH & MAIL
-jwt = JWTManager(app)
-mail = Mail(app)
-
 # --- IMPORT ROUTES ---
-# We import routes at the bottom to avoid circular import errors
 from routes import *
 
 if __name__ == "__main__":
