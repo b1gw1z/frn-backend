@@ -9,9 +9,11 @@ reset_cloud_db.py
 wipe_local_db.py
 setup_cloud.py
 promote_to_admin.py
-reset_db.py
+reset_admin.py
 check_partner.py
 update_cloud_db.py
 enable_postgis.py
 repair_cloud_db.py
 rebuild_cloud_db.py
+force_update_columns.py
+master_patch.py

@@ -142,6 +142,142 @@ def get_admin_stats():
     }), 200
 
 # =======================================================
+#  SECTION 3: ADMIN DASHBOARD (Detailed Drill-Downs)
+# =======================================================
+
+# 1. USERS CLICKED -> Show full list with roles
+@app.route('/api/admin/users-list', methods=['GET'])
+@jwt_required()
+def get_all_users_detailed():
+    """ 
+    Called when Admin clicks the 'Total Users' card.
+    Returns a list of all users, their roles, and status.
+    """
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    if user.role != 'admin': return jsonify({'error': 'Admins only'}), 403
+
+    users = User.query.all()
+    results = []
+    
+    for u in users:
+        results.append({
+            'id': u.id,
+            'organization_name': u.organization_name,
+            'email': u.email,
+            'role': u.role.capitalize(), # 'Donor', 'Rescuer', 'Admin'
+            'is_verified': u.is_verified,
+            'points': u.points,
+            'tier': u.impact_tier
+        })
+    
+    return jsonify(results), 200
+
+
+# 2. CLAIMS CLICKED -> Show history of who took what
+@app.route('/api/admin/claims-log', methods=['GET'])
+@jwt_required()
+def get_claims_log():
+    """
+    Called when Admin clicks 'Claims' card.
+    Shows: Date | Rescuer | Donor | Food | Weight
+    """
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    if user.role != 'admin': return jsonify({'error': 'Admins only'}), 403
+
+    # Join Claim -> Donation -> Donor & Rescuer
+    claims = db.session.query(Claim, Donation, User)\
+        .join(Donation, Claim.donation_id == Donation.id)\
+        .join(User, Claim.rescuer_id == User.id)\
+        .order_by(desc(Claim.claimed_at)).all()
+
+    results = []
+    for claim, donation, rescuer in claims:
+        results.append({
+            'claim_id': claim.id,
+            'date': claim.claimed_at.strftime('%Y-%m-%d %H:%M'),
+            'rescuer_name': rescuer.organization_name,
+            'donor_name': donation.donor.organization_name,
+            'food_title': donation.title,
+            'weight_kg': claim.quantity_claimed,
+            'status': 'Picked Up' if claim.picked_up_at else 'Pending Pickup'
+        })
+
+    return jsonify(results), 200
+
+
+# 3. PENDING CLICKED -> Show waiting list (Already partially exists, but updated here)
+@app.route('/api/admin/pending-list', methods=['GET'])
+@jwt_required()
+def get_pending_details():
+    """
+    Called when Admin clicks 'Pending' card.
+    Shows users waiting for approval + registration date.
+    """
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    if user.role != 'admin': return jsonify({'error': 'Admins only'}), 403
+
+    pending_users = User.query.filter_by(is_verified=False).all()
+    results = []
+
+    for u in pending_users:
+        # Note: We don't have a 'registered_at' column in User yet, 
+        # so we will just show their details.
+        results.append({
+            'id': u.id,
+            'organization_name': u.organization_name,
+            'email': u.email,
+            'role': u.role,
+            'registration_number': u.registration_number,
+            'verification_proof': u.verification_proof
+        })
+
+    return jsonify(results), 200
+
+
+# 4. FOOD RESCUED CLICKED -> Show Aggregated Stats (Rice: 30kg, etc.)
+@app.route('/api/admin/food-breakdown', methods=['GET'])
+@jwt_required()
+def get_food_breakdown():
+    """
+    Called when Admin clicks 'Food Rescued' card.
+    Groups claims by 'Food Type' and sums the weight.
+    Example Output: {'Rice': 50, 'Beans': 20, 'Vegetables': 100}
+    """
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    if user.role != 'admin': return jsonify({'error': 'Admins only'}), 403
+
+    # Magic SQL: Group by Food Type, Sum the Claimed Quantity
+    stats = db.session.query(
+        Donation.food_type, 
+        func.sum(Claim.quantity_claimed)
+    ).join(Claim).group_by(Donation.food_type).all()
+
+    results = []
+    total_system_weight = 0
+
+    for food_type, total_weight in stats:
+        if total_weight: # Filter out None/Zero
+            val = round(total_weight, 1)
+            results.append({
+                'name': food_type or "Uncategorized", 
+                'total_kg': val
+            })
+            total_system_weight += val
+
+    # Sort so the most popular food is at the top
+    results.sort(key=lambda x: x['total_kg'], reverse=True)
+
+    return jsonify({
+        'breakdown': results,
+        'grand_total_kg': total_system_weight
+    }), 200
+    
+    
+# =======================================================
 #  SECTION 4: DONATION MANAGEMENT (Map Enabled!)
 # =======================================================
 
