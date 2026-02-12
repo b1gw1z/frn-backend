@@ -7,7 +7,7 @@ from datetime import datetime
 db = SQLAlchemy()
 
 # ==========================================
-#  1. USER MODEL
+#  1. USER MODEL (Unchanged)
 # ==========================================
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
@@ -17,22 +17,17 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     
-    # --- B2B FIELDS ---
-    role = db.Column(db.String(20), nullable=False) # 'donor', 'rescuer', 'admin'
+    role = db.Column(db.String(20), nullable=False)
     organization_name = db.Column(db.String(150), nullable=False) 
     registration_number = db.Column(db.String(50), unique=True, nullable=False)
     business_type = db.Column(db.String(50), nullable=False)
     
-    # --- GAMIFICATION ---
     points = db.Column(db.Integer, default=0)
     impact_tier = db.Column(db.String(50), default="Newcomer")
     
-    # --- SECURITY ---
     is_verified = db.Column(db.Boolean, default=False)
     verification_proof = db.Column(db.String(255), nullable=True)
     
-    # --- GEOLOCATION (The Critical Part) ---
-    # srid=4326 ensures it treats numbers as GPS Lat/Lon
     location = db.Column(Geometry(geometry_type='POINT', srid=4326))
 
     donations = db.relationship('Donation', backref='donor', lazy=True)
@@ -45,7 +40,7 @@ class User(UserMixin, db.Model):
         return check_password_hash(self.password_hash, password)
 
 # ==========================================
-#  2. DONATION MODEL
+#  2. DONATION MODEL (Updated for History)
 # ==========================================
 class Donation(db.Model):
     __tablename__ = 'donations'
@@ -53,33 +48,39 @@ class Donation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text)
-    quantity_kg = db.Column(db.Float)
     
-    # --- FLEXIBLE FIELDS ---
+    # TRACKING STOCK
+    initial_quantity_kg = db.Column(db.Float) # <--- NEW: What they started with
+    quantity_kg = db.Column(db.Float)         # <--- EXISTING: What is left right now
+    
     food_type = db.Column(db.String(50)) 
     tags = db.Column(db.String(200))
     image_url = db.Column(db.String(500))
     
     donor_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    status = db.Column(db.String(20), default='available')
+    status = db.Column(db.String(20), default='available') # 'available', 'partially_claimed', 'claimed'
     created_at = db.Column(db.DateTime, server_default=db.func.now())
     expiration_date = db.Column(db.DateTime, nullable=True)
     
-    claim = db.relationship('Claim', backref='donation', uselist=False)
+    # Relationship to track all partial claims on this item
+    claims = db.relationship('Claim', backref='donation', lazy=True)
 
 # ==========================================
-#  3. CLAIM MODEL
+#  3. CLAIM MODEL (Updated for Ledger)
 # ==========================================
 class Claim(db.Model):
     __tablename__ = 'claims'
     id = db.Column(db.Integer, primary_key=True)
-    donation_id = db.Column(db.Integer, db.ForeignKey('donations.id'), unique=True, nullable=False)
+    donation_id = db.Column(db.Integer, db.ForeignKey('donations.id'), nullable=False) # Removed unique=True to allow multiple claims
     rescuer_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    
+    quantity_claimed = db.Column(db.Float, nullable=False) # <--- NEW: How much THEY took
+    
     claimed_at = db.Column(db.DateTime, server_default=db.func.now())
     picked_up_at = db.Column(db.DateTime, nullable=True)
 
 # ==========================================
-#  4. MESSAGE MODEL
+#  4. MESSAGE MODEL (Unchanged)
 # ==========================================
 class Message(db.Model):
     __tablename__ = 'messages'

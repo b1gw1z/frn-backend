@@ -189,6 +189,7 @@ def create_donation():
         title=data['title'],
         description=data['description'],
         quantity_kg=kg_amount,
+        initial_quantity_kg=kg_amount,
         food_type=data['food_type'],
         tags=data.get('tags', ''),
         image_url=data.get('image_url'),
@@ -213,23 +214,32 @@ def create_donation():
 def get_donations():
     """
     Returns available donations.
-    ✅ Distance Sorting ENABLED (Requires PostGIS from Step 2)
+    ✅ HIDES EXPIRED ITEMS automatically.
+    ✅ Uses ST_Distance with GEOGRAPHY for accurate meters.
     """
     lat = request.args.get('lat', type=float)
     lng = request.args.get('lng', type=float)
     results = []
 
+    # Filter out expired items in Python loop for safety
+    now = datetime.now()
+
     if lat and lng:
-        # Create a geometry point for the rescuer
         rescuer_location = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
         
-        # Calculate distance using PostGIS
         donations_with_dist = db.session.query(
             Donation, 
-            func.ST_DistanceSphere(User.location, rescuer_location).label('distance')
-        ).join(User).filter(Donation.status == 'available').all()
+            func.ST_Distance(
+                func.ST_Cast(User.location, 'GEOGRAPHY'), 
+                func.ST_Cast(rescuer_location, 'GEOGRAPHY')
+            ).label('distance')
+        ).join(User).filter(Donation.status.in_(['available', 'partially_claimed'])).all()
 
         for donation, distance_meters in donations_with_dist:
+            # 🛑 Skip if Expired
+            if donation.expiration_date and donation.expiration_date < now:
+                continue
+
             results.append({
                 'id': donation.id,
                 'title': donation.title,
@@ -243,13 +253,15 @@ def get_donations():
                 'distance_km': round(distance_meters / 1000, 2)
             })
         
-        # Sort results by distance (closest first)
         results.sort(key=lambda x: x['distance_km'])
         
     else:
-        # Fallback if no location provided
-        donations = Donation.query.filter_by(status='available').all()
+        donations = Donation.query.filter(Donation.status.in_(['available', 'partially_claimed'])).all()
         for donation in donations:
+            # 🛑 Skip if Expired
+            if donation.expiration_date and donation.expiration_date < now:
+                continue
+
             results.append({
                 'id': donation.id,
                 'title': donation.title,
@@ -271,12 +283,16 @@ def get_donations():
 @app.route('/api/claim', methods=['POST'])
 @jwt_required()
 def claim_donation():
+    """
+    Standard Claim Logic + SAFETY CHECK.
+    Prevents claiming of expired food.
+    """
     data = request.get_json()
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
 
     if not user.is_verified:
-        return jsonify({'error': 'Account not verified. You cannot claim food yet.'}), 403
+        return jsonify({'error': 'Account not verified.'}), 403
 
     if not data.get('donation_id'):
         return jsonify({'error': 'Missing donation_id'}), 400
@@ -286,24 +302,48 @@ def claim_donation():
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404
 
-    if donation.status != 'available':
-        return jsonify({'error': 'This donation has already been claimed'}), 400
+    # 🛑 EXPIRATION CHECK (New)
+    # If there is an expiry date AND it is in the past...
+    if donation.expiration_date and donation.expiration_date < datetime.now():
+        return jsonify({'error': 'This donation has expired and cannot be claimed.'}), 400
+
+    if donation.status == 'claimed':
+        return jsonify({'error': 'This donation is fully claimed.'}), 400
+
+    # --- PARTIAL CLAIM LOGIC ---
+    claim_qty = float(data.get('quantity_kg', donation.quantity_kg))
+    
+    if claim_qty <= 0:
+         return jsonify({'error': 'Quantity must be positive'}), 400
+    
+    # Tolerance for floating point math
+    if claim_qty > donation.quantity_kg + 0.01:
+        return jsonify({'error': f'Only {donation.quantity_kg}kg is available.'}), 400
 
     new_claim = Claim(
-        donation_id=data['donation_id'],
-        rescuer_id=current_user_id 
+        donation_id=donation.id,
+        rescuer_id=current_user_id,
+        quantity_claimed=claim_qty
     )
-
-    donation.status = 'claimed'
+    
+    donation.quantity_kg -= claim_qty
+    
+    if donation.quantity_kg <= 0.1:
+        donation.quantity_kg = 0
+        donation.status = 'claimed'
+        msg = "You claimed the last of this donation!"
+    else:
+        donation.status = 'partially_claimed'
+        msg = f"You claimed {claim_qty}kg. {round(donation.quantity_kg, 1)}kg remains available."
 
     try:
         db.session.add(new_claim)
         db.session.commit()
-        return jsonify({'message': 'Donation claimed! Please contact the donor to arrange pickup.'}), 201
+        return jsonify({'message': msg}), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
-
+    
 @app.route('/api/admin/pending-users', methods=['GET'])
 @jwt_required()
 def get_pending_users():
@@ -360,23 +400,26 @@ def get_user_history():
     history = []
     
     if user.role == 'donor':
+        # Donors see: What they posted, and how much is left
         donations = Donation.query.filter_by(donor_id=current_user_id).order_by(desc(Donation.created_at)).all()
         for d in donations:
             history.append({
                 'date': d.created_at.strftime('%Y-%m-%d'),
                 'title': d.title,
-                'quantity_kg': d.quantity_kg,
+                'initial_qty': d.initial_quantity_kg, # What I gave
+                'remaining_qty': d.quantity_kg,       # What is left
                 'food_type': d.food_type,
                 'status': d.status
             })
             
     elif user.role == 'rescuer':
+        # Rescuers see: Exactly what THEY took (not the whole donation size)
         claims = db.session.query(Claim, Donation).join(Donation).filter(Claim.rescuer_id == current_user_id).all()
         for claim, donation in claims:
             history.append({
                 'date': claim.claimed_at.strftime('%Y-%m-%d'),
                 'title': donation.title,
-                'quantity_kg': donation.quantity_kg,
+                'quantity_claimed': claim.quantity_claimed, # <--- Specific amount
                 'food_type': donation.food_type,
                 'donor_name': donation.donor.organization_name
             })
@@ -541,3 +584,46 @@ def delete_donation(donation_id):
     db.session.delete(donation)
     db.session.commit()
     return jsonify({'message': 'Donation deleted successfully'}), 200
+
+@app.route('/api/donations/<int:donation_id>', methods=['PUT'])
+@jwt_required()
+def update_donation(donation_id):
+    """
+    Allows a Donor to edit their listing (Title, Quantity, etc.).
+    Constraint: Can only edit if the item hasn't been fully claimed yet.
+    """
+    current_user_id = get_jwt_identity()
+    donation = Donation.query.get(donation_id)
+
+    if not donation:
+        return jsonify({'error': 'Donation not found'}), 404
+
+    # 1. Check Ownership
+    if str(donation.donor_id) != str(current_user_id):
+        return jsonify({'error': 'Unauthorized. You did not post this.'}), 403
+
+    # 2. Check Status
+    if donation.status != 'available':
+        return jsonify({'error': 'Cannot edit. This item is already claimed or closed.'}), 400
+
+    data = request.get_json()
+
+    # 3. Update Fields (Only if provided)
+    if 'title' in data: donation.title = data['title']
+    if 'description' in data: donation.description = data['description']
+    if 'food_type' in data: donation.food_type = data['food_type']
+    if 'tags' in data: donation.tags = data['tags']
+    if 'image_url' in data: donation.image_url = data['image_url']
+    
+    # Special Logic for Quantity: Update points if quantity changes?
+    # For simplicity, we just update the weight. 
+    # (Advanced: You could recalculate points, but let's keep it simple for now).
+    if 'quantity_kg' in data: 
+        donation.quantity_kg = float(data['quantity_kg'])
+
+    try:
+        db.session.commit()
+        return jsonify({'message': 'Donation updated successfully!'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
