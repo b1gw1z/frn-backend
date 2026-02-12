@@ -1,8 +1,8 @@
-"""Added gamification, images, and flexible tags
+"""Initial migration with History and Expiration
 
-Revision ID: 911751052ecc
+Revision ID: 3603c33dfa39
 Revises: 
-Create Date: 2026-02-11 09:00:49.934938
+Create Date: 2026-02-12 01:24:49.303844
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 import geoalchemy2
 
 # revision identifiers, used by Alembic.
-revision = '911751052ecc'
+revision = '3603c33dfa39'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -42,6 +42,7 @@ def upgrade():
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('title', sa.String(length=100), nullable=False),
     sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('initial_quantity_kg', sa.Float(), nullable=True),
     sa.Column('quantity_kg', sa.Float(), nullable=True),
     sa.Column('food_type', sa.String(length=50), nullable=True),
     sa.Column('tags', sa.String(length=200), nullable=True),
@@ -57,12 +58,12 @@ def upgrade():
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('donation_id', sa.Integer(), nullable=False),
     sa.Column('rescuer_id', sa.Integer(), nullable=False),
+    sa.Column('quantity_claimed', sa.Float(), nullable=False),
     sa.Column('claimed_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
     sa.Column('picked_up_at', sa.DateTime(), nullable=True),
     sa.ForeignKeyConstraint(['donation_id'], ['donations.id'], ),
     sa.ForeignKeyConstraint(['rescuer_id'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('donation_id')
+    sa.PrimaryKeyConstraint('id')
     )
     op.create_table('messages',
     sa.Column('id', sa.Integer(), nullable=False),
