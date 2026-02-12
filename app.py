@@ -35,14 +35,19 @@ mail = Mail(app)
 CORS(app, resources={
     r"/*": {
         "origins": [
-            "http://localhost:3000",
-            "https://frn-nigeria.vercel.app",
-            "https://food-rescue-network.vercel.app"
+            "http://localhost:3000",              # Local Development
+            "https://frn-nigeria.vercel.app",     # Main Production Domain
+            "https://food-rescue-network.vercel.app" # Old Domain (Optional)
         ],
-        # This allows ANY Vercel preview URL (like the one your partner is using)
-        "origin_regex": r"https://.*\.vercel\.app.*",
+        # ---------------------------------------------------------
+        # THE FIX: Allow any Vercel Preview URL using Regex
+        # This matches https://ANYTHING.vercel.app
+        # ---------------------------------------------------------
+        "origin_regex": r"https://.*\.vercel\.app.*", 
+        
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+        "supports_credentials": True
     }
 })
 
