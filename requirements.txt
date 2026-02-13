@@ -23,3 +23,6 @@ SQLAlchemy
 typing_extensions
 Werkzeug
 Flask-Mail
+flask-socketio
+simple-websocket
+gevent

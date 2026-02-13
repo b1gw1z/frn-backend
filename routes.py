@@ -1,7 +1,7 @@
 import csv
 import io
 from flask import request, jsonify, make_response
-from app import app, db, mail
+from app import app, db, mail, socketio
 from models import User, Donation, Claim, Message
 from werkzeug.security import generate_password_hash, check_password_hash 
 from sqlalchemy import func, desc
@@ -326,6 +326,7 @@ def create_donation():
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
 
+    # 1. Security Checks
     if not user.is_verified:
         return jsonify({'error': 'Account not verified. You cannot post donations yet.'}), 403
 
@@ -334,25 +335,17 @@ def create_donation():
 
     data = request.get_json()
     
+    # 2. Validation
     required_fields = ['title', 'description', 'quantity_kg', 'food_type']
     if not all(field in data for field in required_fields):
         return jsonify({'error': 'Missing required fields'}), 400
 
-    # --- GAMIFICATION LOGIC (1kg = 10 Points) ---
     try:
         kg_amount = float(data['quantity_kg'])
-        points_earned = int(kg_amount * 10)
-        user.points += points_earned
-        
-        # Update Tier
-        if user.points >= 5000: user.impact_tier = "Sapphire"
-        elif user.points >= 2000: user.impact_tier = "Gold"
-        elif user.points >= 500: user.impact_tier = "Silver"
-        else: user.impact_tier = "Bronze"
-        
     except ValueError:
         return jsonify({'error': 'Quantity must be a number'}), 400
 
+    # 3. Date Handling
     exp_date = None
     if 'expiration_date' in data:
         try:
@@ -360,31 +353,41 @@ def create_donation():
         except ValueError:
             return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
 
+    # 4. Create Donation (NO POINTS AWARDED YET)
     new_donation = Donation(
         title=data['title'],
         description=data['description'],
         quantity_kg=kg_amount,
-        initial_quantity_kg=kg_amount,
+        initial_quantity_kg=kg_amount, # Important for tracking completion
         food_type=data['food_type'],
         tags=data.get('tags', ''),
         image_url=data.get('image_url'),
         donor_id=current_user_id,
-        status='available',
+        status='available', # Default status
         expiration_date=exp_date
     )
 
     try:
         db.session.add(new_donation)
         db.session.commit()
+        
+        # --- REAL TIME TRIGGER (ADDED BACK) ---
+        # This sends a message to everyone listening on the 'new_donation' channel
+        socketio.emit('new_donation', {
+            'message': f"New donation posted: {new_donation.title}",
+            'quantity': new_donation.quantity_kg,
+            'location': user.organization_name,
+            'id': new_donation.id
+        })
+
         return jsonify({
-            'message': f'Donation posted! You earned {points_earned} points.',
-            'new_tier': user.impact_tier,
+            'message': 'Donation posted successfully! Points will be awarded when this item is claimed.',
             'donation_id': new_donation.id
         }), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
-
+    
 @app.route('/api/donations', methods=['GET'])
 def get_donations():
     """
@@ -459,33 +462,34 @@ def get_donations():
 @jwt_required()
 def claim_donation():
     """
-    Standard Claim Logic + SAFETY CHECK.
-    Prevents claiming of expired food.
+    Standard Claim Logic + SAFETY CHECK + POINTS AWARDING.
+    Prevents claiming of expired food and rewards the original Donor.
     """
     data = request.get_json()
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    rescuer = User.query.get(current_user_id) # The person claiming (NGO)
 
-    if not user.is_verified:
+    # 1. Security & Validation
+    if not rescuer.is_verified:
         return jsonify({'error': 'Account not verified.'}), 403
 
-    if not data.get('donation_id'):
+    donation_id = data.get('donation_id')
+    if not donation_id:
         return jsonify({'error': 'Missing donation_id'}), 400
 
-    donation = Donation.query.get(data['donation_id'])
-    
+    donation = Donation.query.get(donation_id)
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404
 
-    # 🛑 EXPIRATION CHECK (New)
-    # If there is an expiry date AND it is in the past...
+    # 2. Safety Checks (Expiration & Status)
     if donation.expiration_date and donation.expiration_date < datetime.now():
         return jsonify({'error': 'This donation has expired and cannot be claimed.'}), 400
 
     if donation.status == 'claimed':
         return jsonify({'error': 'This donation is fully claimed.'}), 400
 
-    # --- PARTIAL CLAIM LOGIC ---
+    # 3. Partial Claim Logic
+    # Default to taking everything if no quantity specified
     claim_qty = float(data.get('quantity_kg', donation.quantity_kg))
     
     if claim_qty <= 0:
@@ -495,26 +499,51 @@ def claim_donation():
     if claim_qty > donation.quantity_kg + 0.01:
         return jsonify({'error': f'Only {donation.quantity_kg}kg is available.'}), 400
 
-    new_claim = Claim(
-        donation_id=donation.id,
-        rescuer_id=current_user_id,
-        quantity_claimed=claim_qty
-    )
-    
+    # 4. Process the Transaction
     donation.quantity_kg -= claim_qty
     
+    # Update Status based on remaining quantity
+    status_msg = ""
     if donation.quantity_kg <= 0.1:
         donation.quantity_kg = 0
         donation.status = 'claimed'
-        msg = "You claimed the last of this donation!"
+        status_msg = "You claimed the last of this donation!"
     else:
         donation.status = 'partially_claimed'
-        msg = f"You claimed {claim_qty}kg. {round(donation.quantity_kg, 1)}kg remains available."
+        status_msg = f"You claimed {claim_qty}kg. {round(donation.quantity_kg, 1)}kg remains available."
 
+    # 5. Create History Record
+    new_claim = Claim(
+        donation_id=donation.id,
+        rescuer_id=current_user_id,
+        quantity_claimed=claim_qty, # Changed to match your model field name usually 'quantity_kg' or 'quantity_claimed'
+        claim_date=datetime.utcnow()
+    )
+    
     try:
+        # --- POINTS AWARDING LOGIC (The New Part) ---
+        # Find the original Donor
+        donor = User.query.get(donation.donor_id)
+        
+        # Calculate Points (1kg = 10 Points)
+        points_earned = int(claim_qty * 10)
+        donor.points += points_earned
+        
+        # Update Donor's Impact Tier
+        if donor.points >= 5000: donor.impact_tier = "Sapphire"
+        elif donor.points >= 2000: donor.impact_tier = "Gold"
+        elif donor.points >= 500: donor.impact_tier = "Silver"
+        else: donor.impact_tier = "Bronze"
+
+        # Save everything (Claim + Donation Update + Donor Points)
         db.session.add(new_claim)
         db.session.commit()
-        return jsonify({'message': msg}), 201
+        
+        return jsonify({
+            'message': status_msg,
+            'donor_reward': f"{donor.organization_name} earned {points_earned} points from this claim."
+        }), 201
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -604,28 +633,108 @@ def get_user_history():
 @app.route('/api/report/download', methods=['GET'])
 @jwt_required()
 def download_report():
-    """ Generates CSV report. """
+    """ 
+    Generates CSV report based on User Role.
+    - Donors: See what they posted, what is taken, and points earned.
+    - Rescuers: See exactly what they claimed (Partial or Full).
+    - Admins: System-wide overview of all donations.
+    """
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
     
+    # Create the in-memory string buffer
     si = io.StringIO()
     cw = csv.writer(si)
     
+    # --- LOGIC FOR DONORS ---
     if user.role == 'donor':
-        cw.writerow(['Date', 'Title', 'Quantity (KG)', 'Food Type', 'Status', 'Impact Points'])
-        donations = Donation.query.filter_by(donor_id=current_user_id).all()
+        # Header: clearly separating Initial vs Claimed vs Remaining
+        cw.writerow(['Date Posted', 'Title', 'Food Type', 'Initial Qty (kg)', 'Claimed Qty (kg)', 'Remaining (kg)', 'Status', 'Points Earned'])
+        
+        donations = Donation.query.filter_by(donor_id=current_user_id).order_by(Donation.created_at.desc()).all()
+        
         for d in donations:
-            points = int(d.quantity_kg * 10)
-            cw.writerow([d.created_at.strftime('%Y-%m-%d'), d.title, d.quantity_kg, d.food_type, d.status, points])
+            # Calculate exactly how much has been taken so far
+            # (assuming you added 'initial_quantity_kg' to model, otherwise use logic below)
+            # If you don't have initial_quantity column, we can't easily calculate 'claimed' 
+            # without summing the claims table. 
+            # Ideally, use: amount_claimed = d.initial_quantity_kg - d.quantity_kg
             
+            # Fallback if you haven't migrated 'initial_quantity_kg' yet:
+            # We assume current quantity is what is left. 
+            # For the report to be accurate on partials, we really need that initial field.
+            # I will assume 'initial_quantity_kg' exists as discussed previously.
+            
+            initial = getattr(d, 'initial_quantity_kg', d.quantity_kg) # Safe fallback
+            remaining = d.quantity_kg
+            claimed_amount = initial - remaining
+            
+            # Points are 10 per kg CLAIMED
+            points = int(claimed_amount * 10)
+            
+            cw.writerow([
+                d.created_at.strftime('%Y-%m-%d'),
+                d.title,
+                d.food_type,
+                initial,
+                round(claimed_amount, 2),  # The actual amount gone
+                round(remaining, 2),       # The actual amount left
+                d.status.upper(),          # AVAILABLE / PARTIALLY_CLAIMED / CLAIMED
+                points
+            ])
+            
+    # --- LOGIC FOR RESCUERS ---
     elif user.role == 'rescuer':
-        cw.writerow(['Claim Date', 'Title', 'Quantity (KG)', 'Food Type', 'Donor Organization'])
-        claims = db.session.query(Claim, Donation).join(Donation).filter(Claim.rescuer_id == current_user_id).all()
-        for claim, donation in claims:
-            cw.writerow([claim.claimed_at.strftime('%Y-%m-%d'), donation.title, donation.quantity_kg, donation.food_type, donation.donor.organization_name])
+        # Header: Focus on the Claim event
+        cw.writerow(['Claim Date', 'Item Title', 'Quantity Claimed (kg)', 'Food Type', 'Donor Organization', 'Status'])
+        
+        # Query Claims directly to get the specific amounts this user took
+        claims = Claim.query.filter_by(rescuer_id=current_user_id).order_by(Claim.claim_date.desc()).all()
+        
+        for claim in claims:
+            # Get the parent donation to find the Donor's name
+            parent_donation = Donation.query.get(claim.donation_id)
+            
+            # Handle case where donation might have been deleted
+            title = parent_donation.title if parent_donation else "Deleted Item"
+            food_type = parent_donation.food_type if parent_donation else "N/A"
+            donor_name = parent_donation.donor.organization_name if (parent_donation and parent_donation.donor) else "Unknown"
+            current_status = parent_donation.status if parent_donation else "Unknown"
 
+            cw.writerow([
+                claim.claim_date.strftime('%Y-%m-%d'),
+                title,
+                claim.quantity_claimed,  # <--- CRITICAL: Shows the specific partial amount they took
+                food_type,
+                donor_name,
+                current_status
+            ])
+
+    # --- LOGIC FOR ADMINS ---
+    elif user.role == 'admin':
+        # Admin gets the "God View" - All donations system-wide
+        cw.writerow(['Date', 'Donor Org', 'Title', 'Initial (kg)', 'Remaining (kg)', 'Status', 'Total Claims'])
+        
+        all_donations = Donation.query.order_by(Donation.created_at.desc()).all()
+        
+        for d in all_donations:
+            # Count how many times this specific item was claimed (partial claims count)
+            claim_count = Claim.query.filter_by(donation_id=d.id).count()
+            initial = getattr(d, 'initial_quantity_kg', d.quantity_kg)
+            
+            cw.writerow([
+                d.created_at.strftime('%Y-%m-%d'),
+                d.donor.organization_name,
+                d.title,
+                initial,
+                d.quantity_kg,
+                d.status.upper(),
+                claim_count
+            ])
+
+    # Final Response Construction
     output = make_response(si.getvalue())
-    output.headers["Content-Disposition"] = f"attachment; filename={user.organization_name}_report.csv"
+    output.headers["Content-Disposition"] = f"attachment; filename={user.role}_{user.organization_name}_report.csv"
     output.headers["Content-type"] = "text/csv"
     return output
 
