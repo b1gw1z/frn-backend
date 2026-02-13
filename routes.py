@@ -806,6 +806,7 @@ def update_donation(donation_id):
     # ---------------------------------------------------------
 #  FORGOT PASSWORD ROUTE
 # ---------------------------------------------------------
+
 @app.route('/api/forgot-password', methods=['POST'])
 def forgot_password():
     data = request.get_json()
@@ -814,26 +815,29 @@ def forgot_password():
     if not email:
         return jsonify({"error": "Email is required"}), 400
 
-    # 1. Check if user exists
     user = User.query.filter_by(email=email).first()
     if not user:
-        # Security tip: Don't tell hackers if an email exists or not.
-        # Just say "If your email is in our system, we sent a link."
         return jsonify({"message": "If your email exists, a reset link has been sent."}), 200
 
-    # 2. Create a temporary Token (valid for 15 minutes)
+    # --- SMART DOMAIN DETECTION ---
+    # 1. Get the URL of the Frontend that called this API (e.g., your preview link)
+    frontend_url = request.headers.get('Origin')
+    
+    # 2. Fallback: If we can't detect it, use your REAL production domain
+    if not frontend_url:
+        frontend_url = "https://food-rescue-network.vercel.app"  # <--- UPDATED HERE
+
+    # 3. Create the token
     reset_token = create_access_token(identity=user.id, expires_delta=timedelta(minutes=15))
 
-    # 3. Construct the Reset Link (Point this to your Vercel Frontend)
-    # This assumes your frontend has a page at /reset-password
-    reset_link = f"https://frn-nigeria.vercel.app/auth/reset-password?token={reset_token}"
+    # 4. Build the dynamic link
+    reset_link = f"{frontend_url}/auth/reset-password?token={reset_token}"
 
-    # 4. Send the Email
     try:
         msg = Message(
             subject="FRN Password Reset Request",
             recipients=[email],
-            body=f"Hello {user.username},\n\nClick the link below to reset your password:\n{reset_link}\n\nThis link expires in 15 minutes.\n\nIf you did not request this, please ignore this email."
+            body=f"Hello,\n\nClick here to reset your password:\n{reset_link}\n\nThis link expires in 15 minutes."
         )
         mail.send(msg)
         return jsonify({"message": "Password reset email sent!"}), 200
