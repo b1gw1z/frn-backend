@@ -8,6 +8,7 @@ import os
 from dotenv import load_dotenv
 import re  
 from flask_socketio import SocketIO
+from datetime import timedelta
 
 load_dotenv()
 
@@ -17,6 +18,8 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL').replace("postgres://", "postgresql://")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'fallback-secret-key')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=25)
 
 # --- EMAIL CONFIGURATION ---
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
