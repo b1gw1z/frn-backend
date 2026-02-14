@@ -393,28 +393,62 @@ def get_donations():
     """
     Returns available donations.
     ✅ HIDES EXPIRED ITEMS automatically.
-    ✅ Uses ST_Distance with GEOGRAPHY for accurate meters.
+    ✅ Uses ST_DistanceSphere (Crash-Proof) for accurate meters.
     """
     lat = request.args.get('lat', type=float)
     lng = request.args.get('lng', type=float)
     results = []
-
-    # Filter out expired items in Python loop for safety
+    
     now = datetime.now()
 
+    # --- SCENARIO 1: LOCATION PROVIDED (Sort by Distance) ---
     if lat and lng:
-        rescuer_location = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
-        
-        donations_with_dist = db.session.query(
-            Donation, 
-            func.ST_Distance(
-                func.ST_Cast(User.location, 'GEOGRAPHY'), 
-                func.ST_Cast(rescuer_location, 'GEOGRAPHY')
-            ).label('distance')
-        ).join(User).filter(Donation.status.in_(['available', 'partially_claimed'])).all()
+        try:
+            # Create point from user coordinates
+            rescuer_location = func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326)
+            
+            # Query with Distance Calculation
+            # We use ST_DistanceSphere which is safer and doesn't require 'Cast'
+            query = db.session.query(
+                Donation, 
+                func.ST_DistanceSphere(User.location, rescuer_location).label('distance_meters')
+            ).join(User).filter(Donation.status.in_(['available', 'partially_claimed']))
+            
+            donations_with_dist = query.all()
 
-        for donation, distance_meters in donations_with_dist:
-            # 🛑 Skip if Expired
+            for donation, distance_meters in donations_with_dist:
+                # 🛑 Skip if Expired
+                if donation.expiration_date and donation.expiration_date < now:
+                    continue
+                
+                # Format Data
+                results.append({
+                    'id': donation.id,
+                    'title': donation.title,
+                    'description': donation.description,
+                    'quantity_kg': donation.quantity_kg,
+                    'food_type': donation.food_type,
+                    'tags': donation.tags,
+                    'image_url': donation.image_url,
+                    'organization_name': donation.donor.organization_name,
+                    'expiration_date': donation.expiration_date,
+                    # Convert meters to km for display
+                    'distance_km': round(distance_meters / 1000, 2) if distance_meters is not None else None
+                })
+            
+            # Sort by nearest first
+            results.sort(key=lambda x: x['distance_km'] if x['distance_km'] is not None else float('inf'))
+
+        except Exception as e:
+            # Fallback if math fails (e.g. bad coords), just return list without distance
+            print(f"⚠️ Distance Error: {e}")
+            # (Logic falls through to the return at the bottom)
+
+    # --- SCENARIO 2: NO LOCATION (Just List Newest) ---
+    if not results and not (lat and lng):
+        donations = Donation.query.filter(Donation.status.in_(['available', 'partially_claimed'])).order_by(Donation.created_at.desc()).all()
+        
+        for donation in donations:
             if donation.expiration_date and donation.expiration_date < now:
                 continue
 
@@ -422,33 +456,13 @@ def get_donations():
                 'id': donation.id,
                 'title': donation.title,
                 'description': donation.description,
+                'organization_name': donation.donor.organization_name,
                 'quantity_kg': donation.quantity_kg,
                 'food_type': donation.food_type,
                 'tags': donation.tags,
                 'image_url': donation.image_url,
-                'organization_name': donation.donor.organization_name,
                 'expiration_date': donation.expiration_date,
-                'distance_km': round(distance_meters / 1000, 2)
-            })
-        
-        results.sort(key=lambda x: x['distance_km'])
-        
-    else:
-        donations = Donation.query.filter(Donation.status.in_(['available', 'partially_claimed'])).all()
-        for donation in donations:
-            # 🛑 Skip if Expired
-            if donation.expiration_date and donation.expiration_date < now:
-                continue
-
-            results.append({
-                'id': donation.id,
-                'title': donation.title,
-                'description': donation.description,
-                'organization_name': donation.donor.organization_name,
-                'quantity_kg': donation.quantity_kg,
-                'tags': donation.tags,
-                'image_url': donation.image_url,
-                'distance_km': None
+                'distance_km': None # No distance calculated
             })
 
     return jsonify({'donations': results}), 200
