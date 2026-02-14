@@ -49,7 +49,7 @@ CORS(app, resources={
             # THE FIX: This allows ANY Vercel Preview URL securely
             re.compile(r"^https://.*\.vercel\.app$") 
         ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "methods": ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
         "supports_credentials": True
     }
