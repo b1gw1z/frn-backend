@@ -586,24 +586,38 @@ def get_pending_users():
 
     return jsonify(output), 200
 
-@app.route('/api/admin/verify/<int:user_id>', methods=['PATCH'])
+
+@app.route('/api/admin/verify/<int:user_id>', methods=['PATCH', 'POST']) # <--- Accept BOTH methods
 @jwt_required()
 def verify_user(user_id):
+    """
+    Manually verifies a user (Admin only).
+    Works with both PATCH and POST to prevent frontend errors.
+    """
     current_user_id = get_jwt_identity()
     admin = User.query.get(current_user_id)
-    
-    if not admin or admin.role != 'admin':
-        return jsonify({'error': 'Access denied. Admins only.'}), 403
 
+    # 1. Admin Security Check
+    if not admin or admin.role != 'admin':
+        return jsonify({'error': 'Unauthorized. Admin access required.'}), 403
+
+    # 2. Find the User
     user_to_verify = User.query.get(user_id)
     if not user_to_verify:
-        return jsonify({'error': 'User not found'}), 404
+        return jsonify({'error': 'User not found.'}), 404
 
-    user_to_verify.is_verified = True
-    db.session.commit()
-
-    return jsonify({'message': f'{user_to_verify.organization_name} has been verified!'}), 200
-
+    # 3. Flip the Switch
+    try:
+        user_to_verify.is_verified = True
+        db.session.commit()
+        return jsonify({
+            'message': f'User {user_to_verify.organization_name} has been verified successfully!',
+            'user_id': user_to_verify.id,
+            'status': 'verified'
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 # =======================================================
 #  SECTION 6: HISTORY & REPORTS
