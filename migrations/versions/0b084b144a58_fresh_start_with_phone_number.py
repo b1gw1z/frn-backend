@@ -1,8 +1,8 @@
-"""Fresh schema sync
+"""Fresh start with phone number
 
-Revision ID: 28aa707e407b
+Revision ID: 0b084b144a58
 Revises: 
-Create Date: 2026-02-15 21:13:00.815202
+Create Date: 2026-02-15 21:58:38.521261
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 import geoalchemy2
 
 # revision identifiers, used by Alembic.
-revision = '28aa707e407b'
+revision = '0b084b144a58'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -23,6 +23,7 @@ def upgrade():
     sa.Column('username', sa.String(length=50), nullable=False),
     sa.Column('email', sa.String(length=120), nullable=False),
     sa.Column('password_hash', sa.String(length=256), nullable=False),
+    sa.Column('phone', sa.String(length=20), nullable=True),
     sa.Column('role', sa.String(length=20), nullable=False),
     sa.Column('organization_name', sa.String(length=150), nullable=False),
     sa.Column('registration_number', sa.String(length=50), nullable=False),
@@ -40,7 +41,6 @@ def upgrade():
     sa.UniqueConstraint('username')
     )
     
-
     op.create_table('audit_logs',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
