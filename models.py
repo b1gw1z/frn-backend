@@ -2,10 +2,12 @@ from flask_sqlalchemy import SQLAlchemy
 from geoalchemy2 import Geometry
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
-from sqlalchemy.orm import deferred  # <--- NEW IMPORT
-from app import db
-
+from datetime import datetime, timedelta
+from sqlalchemy.orm import deferred
+from extensions import db
+import secrets
+import jwt
+from flask import current_app
 
 # ==========================================
 #  1. USER MODEL
@@ -32,10 +34,11 @@ class User(UserMixin, db.Model):
     is_verified = db.Column(db.Boolean, default=False)
     verification_proof = db.Column(db.String(255), nullable=True)
     
+    # --- TIMESTAMPS ---
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow) # <--- ADDED
     
     # --- GEOLOCATION (LAZY LOADED) ---
-   
     location = db.Column(Geometry(geometry_type='POINT', srid=4326))
     
     donations = db.relationship('Donation', backref='donor', lazy=True)
@@ -46,6 +49,31 @@ class User(UserMixin, db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+    
+    def get_verification_token(self, expires_sec=86400):
+        """Generates a JWT token for email verification."""
+        s = jwt.encode(
+            {
+                "user_id": self.id,
+                "exp": datetime.utcnow() + timedelta(seconds=expires_sec)
+            },
+            current_app.config['SECRET_KEY'],
+            algorithm="HS256"
+        )
+        return s
+
+    @staticmethod
+    def verify_token(token):
+        """Decodes the token and returns the User."""
+        try:
+            user_id = jwt.decode(
+                token,
+                current_app.config['SECRET_KEY'],
+                algorithms=["HS256"]
+            )['user_id']
+        except:
+            return None
+        return User.query.get(user_id)
 
 # ==========================================
 #  2. DONATION MODEL
@@ -66,7 +94,10 @@ class Donation(db.Model):
     
     donor_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     status = db.Column(db.String(20), default='available')
+    
+    # --- TIMESTAMPS ---
     created_at = db.Column(db.DateTime, server_default=db.func.now())
+    updated_at = db.Column(db.DateTime, server_default=db.func.now(), onupdate=db.func.now())
     expiration_date = db.Column(db.DateTime, nullable=True)
     
     claims = db.relationship('Claim', backref='donation', lazy=True)
@@ -76,14 +107,25 @@ class Donation(db.Model):
 # ==========================================
 class Claim(db.Model):
     __tablename__ = 'claims'
+    
     id = db.Column(db.Integer, primary_key=True)
     donation_id = db.Column(db.Integer, db.ForeignKey('donations.id'), nullable=False)
     rescuer_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     
     quantity_claimed = db.Column(db.Float, nullable=False)
     
-    claimed_at = db.Column(db.DateTime, server_default=db.func.now())
+    # --- TIME TRACKING ---
+    claimed_at = db.Column(db.DateTime, server_default=db.func.now()) # Acts as Created At
     picked_up_at = db.Column(db.DateTime, nullable=True)
+    updated_at = db.Column(db.DateTime, server_default=db.func.now(), onupdate=db.func.now()) # <--- ADDED
+    
+    # --- VERIFICATION & SECURITY ---
+    pickup_code = db.Column(db.String(10), unique=True, nullable=True)
+    
+    status = db.Column(db.String(20), default='pending_pickup') 
+
+    def generate_code(self):
+        self.pickup_code = secrets.token_hex(3).upper()
 
 # ==========================================
 #  4. MESSAGE MODEL
@@ -95,4 +137,69 @@ class Message(db.Model):
     receiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     donation_id = db.Column(db.Integer, db.ForeignKey('donations.id'), nullable=False)
     text = db.Column(db.Text, nullable=False)
-    timestamp = db.Column(db.DateTime, server_default=db.func.now())
+    timestamp = db.Column(db.DateTime, server_default=db.func.now()) # Acts as Created At
+
+# ==========================================
+#  5. AUDIT LOG MODEL
+# ==========================================
+class AuditLog(db.Model):
+    __tablename__ = 'audit_logs'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    action = db.Column(db.String(50), nullable=False)
+    details = db.Column(db.String(255))
+    timestamp = db.Column(db.DateTime, server_default=db.func.now()) # Acts as Created At
+    
+    user = db.relationship('User', backref='logs')    
+
+# ==========================================
+#  6. REPORT MODEL
+# ==========================================
+class Report(db.Model):
+    __tablename__ = 'reports'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    reporter_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    donation_id = db.Column(db.Integer, db.ForeignKey('donations.id'), nullable=False)
+    reason = db.Column(db.String(255), nullable=False)
+    timestamp = db.Column(db.DateTime, server_default=db.func.now()) # Acts as Created At
+    status = db.Column(db.String(20), default='pending')
+
+    reporter = db.relationship('User', backref='reports_filed')
+    donation = db.relationship('Donation', backref='reports')
+    
+class Ticket(db.Model):
+    __tablename__ = 'tickets'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    reporter_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    
+    # Optional: Link to a specific transaction if relevant
+    claim_id = db.Column(db.Integer, db.ForeignKey('claims.id'), nullable=True) 
+    
+    subject = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(20), default='open') # open, in_progress, resolved
+    priority = db.Column(db.String(20), default='medium') # low, medium, high
+    
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+    resolved_at = db.Column(db.DateTime, nullable=True)
+    
+    # Resolution details (what did the admin say?)
+    admin_response = db.Column(db.Text, nullable=True)
+
+    # Relationship
+    reporter = db.relationship('User', backref='tickets')
+    claim = db.relationship('Claim', backref='tickets')  
+    
+
+class Watchlist(db.Model):
+    __tablename__ = 'watchlists'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    food_type = db.Column(db.String(50), nullable=False) # e.g., "Grain", "Cooked Meal"
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    user = db.relationship('User', backref='watchlist_items')      

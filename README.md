@@ -74,3 +74,6 @@ Register a user.
 Login to get the access_token.
 
 For protected routes (Create Donation, Claim), go to the Authorization tab in Postman, select Bearer Token, and paste your token.
+
+Future Improvement:
+"Currently, verification is handled via an Admin Approval Workflow (Human-in-the-loop). In a production environment, I would integrate the Dojah or Smile ID KYB API to automate CAC validation and check the SCUML status of NGOs instantly."

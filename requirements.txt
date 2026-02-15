@@ -26,3 +26,5 @@ Flask-Mail
 flask-socketio
 simple-websocket
 gevent
+reportlab
+Flask-APScheduler

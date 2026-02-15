@@ -1,8 +1,8 @@
-"""Initial migration with History and Expiration
+"""Fresh schema sync
 
-Revision ID: 3603c33dfa39
+Revision ID: 28aa707e407b
 Revises: 
-Create Date: 2026-02-12 01:24:49.303844
+Create Date: 2026-02-15 21:13:00.815202
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 import geoalchemy2
 
 # revision identifiers, used by Alembic.
-revision = '3603c33dfa39'
+revision = '28aa707e407b'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -31,6 +31,8 @@ def upgrade():
     sa.Column('impact_tier', sa.String(length=50), nullable=True),
     sa.Column('is_verified', sa.Boolean(), nullable=True),
     sa.Column('verification_proof', sa.String(length=255), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=True),
     sa.Column('location', geoalchemy2.types.Geometry(geometry_type='POINT', srid=4326, dimension=2, from_text='ST_GeomFromEWKT', name='geometry'), nullable=True),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('email'),
@@ -38,6 +40,16 @@ def upgrade():
     sa.UniqueConstraint('username')
     )
     
+
+    op.create_table('audit_logs',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('action', sa.String(length=50), nullable=False),
+    sa.Column('details', sa.String(length=255), nullable=True),
+    sa.Column('timestamp', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
     op.create_table('donations',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('title', sa.String(length=100), nullable=False),
@@ -50,8 +62,17 @@ def upgrade():
     sa.Column('donor_id', sa.Integer(), nullable=False),
     sa.Column('status', sa.String(length=20), nullable=True),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
     sa.Column('expiration_date', sa.DateTime(), nullable=True),
     sa.ForeignKeyConstraint(['donor_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_table('watchlists',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('food_type', sa.String(length=50), nullable=False),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('claims',
@@ -61,9 +82,13 @@ def upgrade():
     sa.Column('quantity_claimed', sa.Float(), nullable=False),
     sa.Column('claimed_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
     sa.Column('picked_up_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
+    sa.Column('pickup_code', sa.String(length=10), nullable=True),
+    sa.Column('status', sa.String(length=20), nullable=True),
     sa.ForeignKeyConstraint(['donation_id'], ['donations.id'], ),
     sa.ForeignKeyConstraint(['rescuer_id'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('pickup_code')
     )
     op.create_table('messages',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -75,6 +100,32 @@ def upgrade():
     sa.ForeignKeyConstraint(['donation_id'], ['donations.id'], ),
     sa.ForeignKeyConstraint(['receiver_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['sender_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_table('reports',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('reporter_id', sa.Integer(), nullable=False),
+    sa.Column('donation_id', sa.Integer(), nullable=False),
+    sa.Column('reason', sa.String(length=255), nullable=False),
+    sa.Column('timestamp', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
+    sa.Column('status', sa.String(length=20), nullable=True),
+    sa.ForeignKeyConstraint(['donation_id'], ['donations.id'], ),
+    sa.ForeignKeyConstraint(['reporter_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_table('tickets',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('reporter_id', sa.Integer(), nullable=False),
+    sa.Column('claim_id', sa.Integer(), nullable=True),
+    sa.Column('subject', sa.String(length=100), nullable=False),
+    sa.Column('description', sa.Text(), nullable=False),
+    sa.Column('status', sa.String(length=20), nullable=True),
+    sa.Column('priority', sa.String(length=20), nullable=True),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
+    sa.Column('resolved_at', sa.DateTime(), nullable=True),
+    sa.Column('admin_response', sa.Text(), nullable=True),
+    sa.ForeignKeyConstraint(['claim_id'], ['claims.id'], ),
+    sa.ForeignKeyConstraint(['reporter_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     
@@ -91,9 +142,13 @@ def downgrade():
     sa.CheckConstraint('srid > 0 AND srid <= 998999', name=op.f('spatial_ref_sys_srid_check')),
     sa.PrimaryKeyConstraint('srid', name=op.f('spatial_ref_sys_pkey'))
     )
+    op.drop_table('tickets')
+    op.drop_table('reports')
     op.drop_table('messages')
     op.drop_table('claims')
+    op.drop_table('watchlists')
     op.drop_table('donations')
+    op.drop_table('audit_logs')
     with op.batch_alter_table('users', schema=None) as batch_op:
         batch_op.drop_index('idx_users_location', postgresql_using='gist')
 
