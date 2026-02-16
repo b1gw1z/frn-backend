@@ -20,7 +20,7 @@ def app():
         "TESTING": True,
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "WTF_CSRF_ENABLED": False,
-        "JWT_SECRET_KEY": "test-secret"
+        "JWT_SECRET_KEY": "super-long-secure-test-key-for-pytest-execution"
     })
 
     with app.app_context():

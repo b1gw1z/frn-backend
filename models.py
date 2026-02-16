@@ -2,7 +2,7 @@ from flask_sqlalchemy import SQLAlchemy
 from geoalchemy2 import Geometry
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import deferred
 from extensions import db
 import secrets
@@ -37,8 +37,8 @@ class User(UserMixin, db.Model):
     verification_proof = db.Column(db.String(255), nullable=True)
     
     # --- TIMESTAMPS ---
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow) # <--- ADDED
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)) # <--- ADDED
     
     # --- GEOLOCATION (LAZY LOADED) ---
     location = db.Column(Geometry(geometry_type='POINT', srid=4326))
@@ -57,7 +57,7 @@ class User(UserMixin, db.Model):
         s = jwt.encode(
             {
                 "user_id": self.id,
-                "exp": datetime.utcnow() + timedelta(seconds=expires_sec)
+                "exp": datetime.now(timezone.utc) + timedelta(seconds=expires_sec)
             },
             current_app.config['SECRET_KEY'],
             algorithm="HS256"
@@ -98,8 +98,8 @@ class Donation(db.Model):
     status = db.Column(db.String(20), default='available')
     
     # --- TIMESTAMPS ---
-    created_at = db.Column(db.DateTime, server_default=db.func.now())
-    updated_at = db.Column(db.DateTime, server_default=db.func.now(), onupdate=db.func.now())
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     expiration_date = db.Column(db.DateTime, nullable=True)
     
     claims = db.relationship('Claim', backref='donation', lazy=True)
@@ -119,7 +119,7 @@ class Claim(db.Model):
     # --- TIME TRACKING ---
     claimed_at = db.Column(db.DateTime, server_default=db.func.now()) # Acts as Created At
     picked_up_at = db.Column(db.DateTime, nullable=True)
-    updated_at = db.Column(db.DateTime, server_default=db.func.now(), onupdate=db.func.now()) # <--- ADDED
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)) # <--- ADDED
     
     # --- VERIFICATION & SECURITY ---
     pickup_code = db.Column(db.String(10), unique=True, nullable=True)
@@ -185,7 +185,7 @@ class Ticket(db.Model):
     status = db.Column(db.String(20), default='open') # open, in_progress, resolved
     priority = db.Column(db.String(20), default='medium') # low, medium, high
     
-    created_at = db.Column(db.DateTime, server_default=db.func.now())
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     resolved_at = db.Column(db.DateTime, nullable=True)
     
     # Resolution details (what did the admin say?)

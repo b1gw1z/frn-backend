@@ -3,7 +3,7 @@ from flask_jwt_extended import create_access_token
 from werkzeug.security import check_password_hash
 from datetime import timedelta
 from models import db, User
-from utils import send_verification_email
+from utils import send_verification_email, get_avatar_url
 from flask_mail import Message
 from extensions import mail # Import mail from main app
 
@@ -104,14 +104,17 @@ def register_individual():
 def login():
     data = request.get_json()
 
+    # 1. Validate Input
     if not data or not data.get('email') or not data.get('password'):
         return jsonify({'error': 'Missing email or password'}), 400
 
     user = User.query.filter_by(email=data['email']).first()
 
-    if user and check_password_hash(user.password_hash, data['password']):
+    # 2. Check Password 
+    # (Uses the model method for cleaner code)
+    if user and user.check_password(data['password']):
         
-        # Add Role & Org Name to Token
+        # Add Role & Org Name to Token Claims
         additional_claims = {"role": user.role, "org": user.organization_name}
         access_token = create_access_token(identity=str(user.id), additional_claims=additional_claims)
         
@@ -123,16 +126,19 @@ def login():
                 'email': user.email,
                 'role': user.role,
                 'organization_name': user.organization_name, 
-                'business_type': user.business_type,         
+                'business_type': user.business_type,          
                 'registration_number': user.registration_number,
                 'is_verified': user.is_verified, 
-                'points': user.points,        
-                'impact_tier': user.impact_tier
+                'points': user.points,       
+                'impact_tier': user.impact_tier,
+                
+                # --- NEW UPDATES ---
+                'phone': user.phone,  # <--- Added Phone
+                'profile_picture': get_avatar_url(user) # <--- Uses Smart Initials Fallback
             }
         }), 200
     else:
-        return jsonify({'error': 'Invalid email or password'}), 401  
-
+        return jsonify({'error': 'Invalid email or password'}), 401
 @auth_bp.route('/api/forgot-password', methods=['POST'])
 def forgot_password():
     data = request.get_json()
