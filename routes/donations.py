@@ -5,7 +5,7 @@ from datetime import datetime
 from models import Watchlist, db, User, Donation, Claim
 from extensions import socketio, mail
 from flask_mail import Message
-from utils import log_activity
+from utils import get_avatar_url, log_activity
 
 donations_bp = Blueprint('donations', __name__)
 
@@ -129,7 +129,7 @@ Login now to claim it before it's gone!
 #  2. GET ALL DONATIONS (Feed)
 # ==========================================
 @donations_bp.route('/api/donations', methods=['GET'])
-def get_donations():
+def get_donations():   
     """
     Returns available donations.
     ✅ Includes Distance for ALL items if lat/lng is provided.
@@ -224,11 +224,15 @@ def get_single_donation(donation_id):
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404
 
+    # --- FIX: Define 'donor' variable here ---
+    donor = donation.donor 
+    # -----------------------------------------
+
     is_expired = False
     if donation.expiration_date and donation.expiration_date < datetime.now():
         is_expired = True
 
-    # Distance
+    # Distance Calculation
     distance_km = None
     if lat and lng:
         try:
@@ -252,17 +256,24 @@ def get_single_donation(donation_id):
         'tags': donation.tags,
         'image_url': donation.image_url,
         'status': 'expired' if is_expired else donation.status,
+        
+        # Now these lines work because 'donor' is defined above
+        'donor_phone': donor.phone if donor else "N/A",
+        'donor_avatar': get_avatar_url(donor) if donor else "",
+        
         'created_at': donation.created_at.strftime('%Y-%m-%d %H:%M:%S'),
         'expiration_date': donation.expiration_date.strftime('%Y-%m-%d') if donation.expiration_date else None,
         'distance_km': distance_km,
-        'donor_location': donation.donor.location, # Raw string (useful for debugging)
-        'organization_name': donation.donor.organization_name,
-        'organization_type': donation.donor.business_type,
-        'donor_verified': donation.donor.is_verified,
-        'donor_tier': getattr(donation.donor, 'impact_tier', 'Bronze'),
+        
+        # Using relationship properties safely
+        'donor_location': str(donor.location) if donor and donor.location else None,
+        'organization_name': donor.organization_name if donor else "Unknown",
+        'organization_type': donor.business_type if donor else "N/A",
+        'donor_verified': donor.is_verified if donor else False,
+        'donor_tier': getattr(donor, 'impact_tier', 'Bronze') if donor else 'Bronze',
+        
         'is_owner': str(current_user_id) == str(donation.donor_id)
     }), 200
-
 
 # ==========================================
 #  4. GET SIMILAR DONATIONS (Discovery)

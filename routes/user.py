@@ -7,7 +7,8 @@ from reportlab.lib import colors
 import io, csv
 from datetime import datetime
 from models import db, User, Donation, Claim, Watchlist
-from utils import log_activity, update_expired_status
+from utils import log_activity, update_expired_status, get_avatar_url
+from extensions import db
 
 user_bp = Blueprint('user', __name__)
 
@@ -27,6 +28,9 @@ def get_user_profile():
         'email': user.email,
         'username': user.username,
         'role': user.role,
+        'phone': user.phone,
+        'profile_picture': get_avatar_url(user),
+        'joined_at': user.created_at.strftime('%Y-%m-%d'),
         'organization_name': user.organization_name,
         'registration_number': user.registration_number,
         'business_type': user.business_type,
@@ -35,6 +39,48 @@ def get_user_profile():
         'points': user.points,        
         'impact_tier': user.impact_tier
     }), 200
+
+
+@user_bp.route('/api/profile', methods=['PATCH'])
+@jwt_required()
+def update_user_profile():
+    """ Allows user to update phone, organization name, or photo. """
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+        
+    data = request.get_json()
+    
+    # Define which fields are allowed to be updated
+    # (Security: Don't allow changing 'role', 'points', or 'is_verified' directly)
+    allowed_fields = ['organization_name', 'phone', 'profile_picture', 'business_type']
+    
+    changes_made = False
+    
+    for field in allowed_fields:
+        if field in data:
+            setattr(user, field, data[field])
+            changes_made = True
+
+    if not changes_made:
+        return jsonify({'message': 'No changes provided'}), 400
+
+    try:
+        db.session.commit()
+        return jsonify({
+            'message': 'Profile updated successfully!',
+            'user': {
+                'organization_name': user.organization_name,
+                'phone': user.phone,
+                'profile_picture': get_avatar_url(user)
+            }
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Update failed: {str(e)}'}), 500
+
 
 @user_bp.route('/api/users/history', methods=['GET'])
 @jwt_required()
@@ -106,6 +152,7 @@ def get_user_history():
 @user_bp.route('/api/user/public-profile/<int:user_id>', methods=['GET'])
 @jwt_required()
 def get_public_profile(user_id):
+    user = User.query.get_or_404(user_id)
     """
     Fetches the public reputation and active listings of a donor.
     Used when a user clicks on a donor's name in the feed.
@@ -134,8 +181,12 @@ def get_public_profile(user_id):
             'id': d.id,
             'title': d.title,
             'quantity_kg': d.quantity_kg,
+            'donor_phone': user.phone,
             'food_type': d.food_type,
             'image_url': d.image_url,
+            'donor_avatar': get_avatar_url(user),
+            'location': str(user.location) if user.location else None,
+            'joined_at': user.created_at.strftime('%Y-%m-%d'),
             'created_at': d.created_at.strftime('%Y-%m-%d')
         })
 
@@ -147,6 +198,9 @@ def get_public_profile(user_id):
         'impact_tier': target_user.impact_tier, # Bronze, Silver, Gold
         'is_verified': target_user.is_verified,
         'member_since': target_user.created_at.strftime('%B %Y') if hasattr(target_user, 'created_at') else "2024", 
+        'joined_at': user.created_at.strftime('%Y-%m-%d') if user.created_at else "2024",
+        'phone': user.phone,
+        'profile_picture': get_avatar_url(user),
         
         # Reputation Stats
         'total_kg_donated': round(total_donated_kg, 1),

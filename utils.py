@@ -67,3 +67,22 @@ def update_expired_status():
     except Exception as e:
         db.session.rollback()
         print(f"Error updating expired items: {e}")        
+        
+def get_avatar_url(user):
+    """
+    Returns the user's uploaded photo OR a Google-style default 
+    (Initials on a colored background) using UI Avatars.
+    """
+    # 1. If user has uploaded a photo, use it
+    if hasattr(user, 'profile_picture') and user.profile_picture:
+        return user.profile_picture
+    
+    # 2. Fallback: Generate initials from organization name
+    # "Food Bank" -> "FB"
+    # background=random gives different colors for different users
+    if user.organization_name:
+        safe_name = user.organization_name.replace(" ", "+")
+    else:
+        safe_name = "User"
+        
+    return f"https://ui-avatars.com/api/?name={safe_name}&background=random&color=fff&size=128"        
