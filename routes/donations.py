@@ -220,7 +220,7 @@ def get_single_donation(donation_id):
     lat = request.args.get('lat', type=float)
     lng = request.args.get('lng', type=float)
 
-    donation = Donation.query.get(donation_id)
+    donation = db.session.get(Donation, donation_id)
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404
 
@@ -366,7 +366,7 @@ def claim_donation():
     if not donation_id:
         return jsonify({'error': 'Missing donation_id'}), 400
 
-    donation = Donation.query.get(donation_id)
+    donation = db.session.get(Donation, donation_id)
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404
 
@@ -459,7 +459,7 @@ def claim_donation():
 @jwt_required()
 def delete_donation(donation_id):
     current_user_id = get_jwt_identity()
-    donation = Donation.query.get(donation_id)
+    donation = db.session.get(Donation, donation_id)
 
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404
@@ -482,7 +482,7 @@ def delete_donation(donation_id):
 @jwt_required()
 def update_donation(donation_id):
     current_user_id = get_jwt_identity()
-    donation = Donation.query.get(donation_id)
+    donation = db.session.get(Donation, donation_id)
 
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404

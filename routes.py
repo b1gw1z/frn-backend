@@ -551,7 +551,7 @@ def claim_donation():
     if not donation_id:
         return jsonify({'error': 'Missing donation_id'}), 400
 
-    donation = Donation.query.get(donation_id)
+    donation = db.session.get(Donation, donation_id)
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404
 
@@ -1003,7 +1003,7 @@ def get_user_profile():
 def delete_donation(donation_id):
     """ Allows Donors to delete unclaimed listings. """
     current_user_id = get_jwt_identity()
-    donation = Donation.query.get(donation_id)
+    donation = db.session.get(Donation, donation_id)
 
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404
@@ -1026,7 +1026,7 @@ def update_donation(donation_id):
     Constraint: Can only edit if the item hasn't been fully claimed yet.
     """
     current_user_id = get_jwt_identity()
-    donation = Donation.query.get(donation_id)
+    donation = db.session.get(Donation, donation_id)
 
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404
@@ -1227,7 +1227,7 @@ def get_single_donation(donation_id):
     lng = request.args.get('lng', type=float)
 
     # 1. Fetch the Donation
-    donation = Donation.query.get(donation_id)
+    donation = db.session.get(Donation, donation_id)
     
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404
@@ -1382,7 +1382,7 @@ def get_single_donation(donation_id):
     lng = request.args.get('lng', type=float)
 
     # 1. Fetch the Donation
-    donation = Donation.query.get(donation_id)
+    donation = db.session.get(Donation, donation_id)
     
     if not donation:
         return jsonify({'error': 'Donation not found'}), 404

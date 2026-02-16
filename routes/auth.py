@@ -6,10 +6,10 @@ from models import db, User
 from utils import send_verification_email, get_avatar_url
 from flask_mail import Message
 from extensions import mail # Import mail from main app
+from unittest.mock import patch
 
 auth_bp = Blueprint('auth', __name__)
 
-# routes/auth.py
 
 @auth_bp.route('/api/register', methods=['POST'])
 def register_business():
@@ -191,3 +191,78 @@ def verify_email(token):
     db.session.commit()
     
     return jsonify({'message': 'Email verified! You can now log in.'}), 200
+
+# ==========================================
+#  3. PASSWORD RESET FLOW (Comprehensive)
+# ==========================================
+def test_password_reset_request_success(client):
+    """ 
+    Should return 200 and pretend to send email.
+    We MOCK the mail.send function so we don't need a real mail server.
+    """
+    # 1. Create User
+    client.post('/api/register', json={
+        "email": "reset_me@example.com", "password": "oldpassword", "role": "donor",
+        "organization_name": "Reset Co", "registration_number": "CAC-RESET",
+        "business_type": "Tech", "latitude": 0, "longitude": 0
+    })
+
+    # 2. Mock the Mail sender to avoid 500 Errors
+    with patch('extensions.mail.send') as mock_mail:
+        response = client.post('/api/reset-password-request', json={"email": "reset_me@example.com"})
+        
+        # 3. Assert Success
+        assert response.status_code == 200
+        assert b"reset link has been sent" in response.data or b"successful" in response.data
+        
+        # 4. Verify that the app TRIED to send an email
+        assert mock_mail.called
+
+def test_password_reset_unknown_email(client):
+    """ Should handle unknown emails gracefully (Security: Don't reveal user existence) """
+    # Depending on your security setting, this might return 200 (to hide user existence) or 404.
+    # Standard practice is often 200 with a generic message, or 404 if less strict.
+    # Adjust assertion based on your specific route logic.
+    with patch('extensions.mail.send'):
+        response = client.post('/api/reset-password-request', json={"email": "ghost@example.com"})
+        assert response.status_code != 500 # Ensure it doesn't crash
+
+# ==========================================
+#  4. EMAIL VERIFICATION FLOW (Comprehensive)
+# ==========================================
+def test_verify_email_success(client):
+    """ 
+    Should successfully verify a user when given a valid token.
+    """
+    # 1. Create a User (Initially Unverified)
+    email = "verify_me@example.com"
+    client.post('/api/register', json={
+        "email": email, "password": "password", "role": "donor",
+        "organization_name": "Verify Co", "registration_number": "CAC-VERIFY",
+        "business_type": "Tech", "latitude": 0, "longitude": 0
+    })
+    
+    # 2. Get the User from DB to generate a REAL token
+    # (We bypass the email and generate the token directly using the Model)
+    user = User.query.filter_by(email=email).first()
+    assert user.is_verified is False # Confirm start state
+    
+    # Generate valid token using the method in your User model
+    valid_token = user.get_verification_token()
+
+    # 3. Call the Verify Endpoint with the VALID token
+    response = client.get(f'/api/verify-email/{valid_token}')
+    
+    # 4. Assert Success
+    assert response.status_code == 200
+    assert b"Email verified" in response.data
+
+    # 5. DB Check: Ensure the user is actually verified now
+    db.session.refresh(user) # Refresh data from DB
+    assert user.is_verified is True
+
+def test_verify_email_invalid_token(client):
+    """ Should fail with invalid token """
+    response = client.get('/api/verify-email/INVALID_TOKEN_123')
+    assert response.status_code == 400
+    assert b"Invalid or expired" in response.data

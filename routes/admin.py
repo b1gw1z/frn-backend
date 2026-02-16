@@ -332,7 +332,7 @@ def impersonate_user(user_id):
     if admin.role != 'admin':
         return jsonify({'error': 'Unauthorized'}), 403
 
-    target_user = User.query.get(user_id)
+    target_user = db.session.get(User, user_id)
     if not target_user:
         return jsonify({'error': 'User not found'}), 404
 

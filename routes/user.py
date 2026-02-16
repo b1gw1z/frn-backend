@@ -158,7 +158,7 @@ def get_public_profile(user_id):
     Used when a user clicks on a donor's name in the feed.
     """
     # 1. Fetch the Donor
-    target_user = User.query.get(user_id)
+    target_user = db.session.get(User, user_id)
     
     if not target_user:
         return jsonify({'error': 'User not found'}), 404

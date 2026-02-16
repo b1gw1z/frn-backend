@@ -39,7 +39,7 @@ def report_donation():
     # Check how many reports this donation has now
     report_count = Report.query.filter_by(donation_id=donation_id).count()
     
-    donation = Donation.query.get(donation_id)
+    donation = db.session.get(Donation, donation_id)
     
     if report_count >= 3: # Threshold
         donation.status = 'under_review' # Auto-hide from feed
