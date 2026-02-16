@@ -13,7 +13,7 @@ admin_bp = Blueprint('admin', __name__)
 def get_admin_stats():
     """ Returns system-wide live metrics. """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     if not user or user.role != 'admin':
         return jsonify({'error': 'Admins only'}), 403
@@ -43,7 +43,7 @@ def get_all_users_detailed():
     Returns a list of all users, their roles, and status.
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     if user.role != 'admin': return jsonify({'error': 'Admins only'}), 403
 
     users = User.query.all()
@@ -70,7 +70,7 @@ def get_claims_log():
     Shows: Date | Rescuer | Donor | Food | Weight
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     if user.role != 'admin': return jsonify({'error': 'Admins only'}), 403
 
     # Join Claim -> Donation -> Donor & Rescuer
@@ -216,7 +216,7 @@ def get_pending_details():
     Shows users waiting for approval + registration date.
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     if user.role != 'admin': 
         return jsonify({'error': 'Admins only'}), 403
@@ -249,7 +249,7 @@ def get_food_breakdown():
     Example Output: {'Rice': 50, 'Beans': 20, 'Vegetables': 100}
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     if user.role != 'admin': return jsonify({'error': 'Admins only'}), 403
 
     # Magic SQL: Group by Food Type, Sum the Claimed Quantity

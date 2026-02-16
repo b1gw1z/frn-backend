@@ -75,7 +75,7 @@ class User(UserMixin, db.Model):
             )['user_id']
         except:
             return None
-        return User.query.get(user_id)
+        return db.session.get(User, user_id)
 
 # ==========================================
 #  2. DONATION MODEL
@@ -140,6 +140,23 @@ class Message(db.Model):
     donation_id = db.Column(db.Integer, db.ForeignKey('donations.id'), nullable=False)
     text = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, server_default=db.func.now()) # Acts as Created At
+    
+    
+class Contact(db.Model):
+    """
+    Allows a user to save a specific nickname for another user.
+    Example: Rescuer saves 'John Doe' as 'The Rice Guy'.
+    This is PRIVATE to the 'owner'.
+    """
+    __tablename__ = 'contacts'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    owner_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False) # Me
+    contact_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False) # The person I'm chatting with
+    nickname = db.Column(db.String(100), nullable=True)
+    
+    # Ensure I can't have two entries for the same person
+    __table_args__ = (db.UniqueConstraint('owner_id', 'contact_user_id', name='_user_contact_uc'),)    
 
 # ==========================================
 #  5. AUDIT LOG MODEL

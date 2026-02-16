@@ -1,118 +1,217 @@
-import json
 import pytest
+import json
+from unittest.mock import patch
+from models import User
+from extensions import db
+from geoalchemy2.elements import WKTElement 
 
 # ==========================================
-#  REGISTRATION TESTS
+#  1. BUSINESS REGISTRATION TESTS
 # ==========================================
 
-def test_register_donor_success(client):
-    """ Should create a new user and return 201 """
-    payload = {
-        "email": "test_donor@example.com",
-        "password": "securepassword",
-        "role": "donor",
-        "organization_name": "Test Hotel",
-        "registration_number": "CAC-11111",
-        "business_type": "Hospitality",
-        "latitude": 6.5244,
-        "longitude": 3.3792
-    }
-    response = client.post('/api/register', json=payload)
-    assert response.status_code == 201
-    assert b"Registration successful" in response.data
+def test_register_business_success(client):
+    """Happy Path: Standard Business Registration."""
+    User.query.filter_by(email="biz@test.com").delete()
+    db.session.commit()
 
-def test_register_duplicate_fail(client):
-    """ Should return 400 if email already exists """
-    # 1. Register User A
     payload = {
-        "email": "duplicate@example.com",
+        "email": "biz@test.com",
         "password": "password",
         "role": "donor",
-        "organization_name": "Org A",
-        "registration_number": "CAC-22222",
-        "business_type": "NGO",
-        "latitude": 0, "longitude": 0
+        "organization_name": "Test Biz",
+        "registration_number": "CAC-BIZ-001",
+        "business_type": "Restaurant",
+        "latitude": 6.5,
+        "longitude": 3.3
     }
-    client.post('/api/register', json=payload)
-
-    # 2. Try to Register User A AGAIN
     response = client.post('/api/register', json=payload)
     
-    # 3. Expect Failure
-    assert response.status_code == 400
-    assert b"already exists" in response.data
+    assert response.status_code == 201
+    assert "successful" in response.get_json()['message']
+    
+    # DB Check
+    user = User.query.filter_by(email="biz@test.com").first()
+    assert user is not None
+    assert user.role == "donor"
 
-def test_register_missing_fields(client):
-    """ Should return 400 if fields are missing """
+def test_register_ngo_missing_docs(client):
+    """Edge Case: NGO (Rescuer) must provide verification_proof."""
     payload = {
-        "email": "incomplete@example.com",
-        # Missing password, role, etc.
+        "email": "ngo@test.com",
+        "password": "password",
+        "role": "rescuer", 
+        "organization_name": "Test NGO",
+        "registration_number": "CAC-NGO-001",
+        "business_type": "NGO",
+        "latitude": 6.5, "longitude": 3.3
+        # MISSING: verification_proof
     }
     response = client.post('/api/register', json=payload)
+    
     assert response.status_code == 400
-    assert b"Missing required field" in response.data
+    assert "must provide a verification document" in response.get_json()['error']
+
+def test_register_duplicate_cac(client):
+    """Edge Case: Cannot reuse CAC number."""
+    # 1. Create first user
+    User.query.filter_by(registration_number="CAC-DUP").delete()
+    user = User(
+        email="u1@test.com", username="u1", role="donor",
+        organization_name="U1", registration_number="CAC-DUP",
+        business_type="Biz", is_verified=True
+    )
+    user.set_password("pass")
+    db.session.add(user)
+    db.session.commit()
+
+    # 2. Try to register second user with same CAC
+    payload = {
+        "email": "u2@test.com", "password": "pass", "role": "donor",
+        "organization_name": "U2", "registration_number": "CAC-DUP",
+        "business_type": "Biz", "latitude": 0, "longitude": 0
+    }
+    response = client.post('/api/register', json=payload)
+    
+    assert response.status_code == 400
+    assert "already exists" in response.get_json()['error']
 
 # ==========================================
-#  LOGIN TESTS
+#  2. INDIVIDUAL REGISTRATION TESTS
+# ==========================================
+
+def test_register_individual_success(client):
+    """Happy Path: Individual Registration."""
+    User.query.filter_by(email="indiv@test.com").delete()
+    db.session.commit()
+
+    payload = {
+        "email": "indiv@test.com",
+        "password": "password",
+        "full_name": "John Doe",
+        "phone": "08012345678",
+        "location": "POINT(3.3 6.5)" 
+    }
+    
+    # Mock email sending so test doesn't crash
+    with patch('extensions.mail.send'):
+        response = client.post('/api/auth/register-individual', json=payload)
+
+    assert response.status_code == 201
+    
+    # DB Check
+    user = User.query.filter_by(email="indiv@test.com").first()
+    assert user is not None
+    assert user.organization_name == "John Doe"
+    assert user.role == "individual"
+
+# ==========================================
+#  3. LOGIN TESTS
 # ==========================================
 
 def test_login_success(client):
-    """ Should return 200, Token, AND User Role """
-    # 1. Create User
-    client.post('/api/register', json={
-        "email": "login_user@example.com",
-        "password": "mypassword",
-        "role": "donor",
-        "organization_name": "Login Corp",
-        "registration_number": "CAC-33333",
-        "business_type": "Retail",
-        "latitude": 0, "longitude": 0
-    })
+    """Happy Path: Login returns token and user data."""
+    User.query.filter_by(email="login@test.com").delete()
+    user = User(
+        email="login@test.com", username="LoginUser", role="donor",
+        organization_name="Login Corp", registration_number="CAC-LOG",
+        business_type="Biz", is_verified=True
+    )
+    user.set_password("password")
+    db.session.add(user)
+    db.session.commit()
 
-    # 2. Login
-    login_payload = {
-        "email": "login_user@example.com",
-        "password": "mypassword"
-    }
-    response = client.post('/api/login', json=login_payload)
-
-    # 3. Check Result
-    assert response.status_code == 200
-    data = json.loads(response.data)
-    
-    # Professional Check: Ensure all critical keys exist
-    assert "access_token" in data
-    assert "user" in data  # <--- We now check for the 'user' object
-    assert data["user"]["role"] == "donor" # <--- Checking inside the object
-    assert data["user"]["email"] == "login_user@example.com"
-
-def test_login_wrong_password(client):
-    """ Should return 401 for bad password """
-    # 1. Create User
-    client.post('/api/register', json={
-        "email": "wrong_pass@example.com",
-        "password": "correct_password",
-        "role": "donor",
-        "organization_name": "Wrong Corp",
-        "registration_number": "CAC-44444",
-        "business_type": "Retail",
-        "latitude": 0, "longitude": 0
-    })
-
-    # 2. Login with WRONG password
     response = client.post('/api/login', json={
-        "email": "wrong_pass@example.com",
-        "password": "WRONG_PASSWORD"
-    })
-
-    assert response.status_code == 401
-    assert b"Invalid email or password" in response.data
-
-def test_login_non_existent_user(client):
-    """ Should return 401 if email doesn't exist """
-    response = client.post('/api/login', json={
-        "email": "ghost@example.com",
+        "email": "login@test.com",
         "password": "password"
     })
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert "access_token" in data
+    assert data['user']['email'] == "login@test.com"
+
+def test_login_fail_wrong_password(client):
+    """Edge Case: Wrong password."""
+    User.query.filter_by(email="wrong@test.com").delete()
+    user = User(
+        email="wrong@test.com", username="Wrong", role="donor",
+        organization_name="Wrong", registration_number="CAC-WRONG",
+        business_type="Biz"
+    )
+    user.set_password("correct")
+    db.session.add(user)
+    db.session.commit()
+
+    response = client.post('/api/login', json={
+        "email": "wrong@test.com",
+        "password": "WRONG"
+    })
+    
     assert response.status_code == 401
-    assert b"Invalid email or password" in response.data
+
+# ==========================================
+#  4. PASSWORD RESET TESTS
+# ==========================================
+
+def test_forgot_password_email_sent(client):
+    """Ensure endpoint calls mail.send when email exists."""
+    # Setup
+    User.query.filter_by(email="reset@test.com").delete()
+    user = User(
+        email="reset@test.com", username="Reset", role="donor",
+        organization_name="Reset", registration_number="CAC-RES",
+        business_type="Biz"
+    )
+    # FIX: Must set password hash to avoid IntegrityError
+    user.set_password("old_password") 
+    db.session.add(user)
+    db.session.commit()
+
+    with patch('extensions.mail.send') as mock_send:
+        response = client.post('/api/forgot-password', json={
+            "email": "reset@test.com"
+        })
+        
+        assert response.status_code == 200
+        assert "sent" in response.get_json()['message']
+        assert mock_send.called
+
+def test_forgot_password_unknown_email(client):
+    """Ensure it doesn't crash on unknown email."""
+    with patch('extensions.mail.send') as mock_send:
+        response = client.post('/api/forgot-password', json={
+            "email": "ghost@test.com"
+        })
+        assert response.status_code == 200 
+        assert not mock_send.called
+
+# ==========================================
+#  5. EMAIL VERIFICATION TESTS
+# ==========================================
+
+def test_verify_email_success(client):
+    """End-to-End verification flow."""
+    # 1. Setup Unverified User
+    User.query.filter_by(email="verify@test.com").delete()
+    user = User(
+        email="verify@test.com", username="Verify", role="donor",
+        organization_name="Verify", registration_number="CAC-VER",
+        business_type="Biz", is_verified=False
+    )
+    # FIX: Must set password hash to avoid IntegrityError
+    user.set_password("password") 
+    db.session.add(user)
+    db.session.commit()
+
+    # 2. Generate Real Token
+    token = user.get_verification_token()
+
+    # 3. Call Endpoint
+    response = client.get(f'/api/auth/verify-email/{token}')
+    
+    assert response.status_code == 200
+    assert "Email verified" in response.get_json()['message']
+
+    # 4. Verify DB Update
+    db.session.refresh(user)
+    assert user.is_verified is True

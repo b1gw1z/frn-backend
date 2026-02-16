@@ -75,7 +75,7 @@ def get_my_tickets():
 def get_all_tickets():
     """ Admin Inbox for all complaints. """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     if user.role != 'admin':
         return jsonify({'error': 'Unauthorized'}), 403
@@ -113,7 +113,7 @@ def get_all_tickets():
 def resolve_ticket(ticket_id):
     """ Admin replies to and closes a ticket. """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     if user.role != 'admin':
         return jsonify({'error': 'Unauthorized'}), 403

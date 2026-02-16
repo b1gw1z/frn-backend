@@ -16,7 +16,7 @@ donations_bp = Blueprint('donations', __name__)
 @jwt_required()
 def create_donation():
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
 
     # 1. Security Checks
     if not user.is_verified:
@@ -288,7 +288,7 @@ def get_similar_donations(donation_id):
     lat = request.args.get('lat', type=float)
     lng = request.args.get('lng', type=float)
     
-    original = Donation.query.get(donation_id)
+    original = db.session.get(Donation, donation_id)
     if not original:
         return jsonify({'error': 'Donation not found'}), 404
 
@@ -353,7 +353,7 @@ def claim_donation():
     """
     data = request.get_json()
     current_user_id = get_jwt_identity()
-    rescuer = User.query.get(current_user_id) 
+    rescuer = db.session.get(User, current_user_id) 
 
     # 1. Security & Validation
     if rescuer.role != 'rescuer':
@@ -405,7 +405,7 @@ def claim_donation():
     
     try:
         # --- POINTS AWARDING LOGIC ---
-        donor = User.query.get(donation.donor_id)
+        donor = db.session.get(User, donation.donor_id)
         points_earned = int(claim_qty * 10)
         donor.points += points_earned
         

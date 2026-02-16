@@ -18,7 +18,7 @@ user_bp = Blueprint('user', __name__)
 def get_user_profile():
     """ Refreshes user data on page reload. """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     if not user:
         return jsonify({'error': 'User not found'}), 404
@@ -46,16 +46,26 @@ def get_user_profile():
 def update_user_profile():
     """ Allows user to update phone, organization name, or photo. """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     if not user:
         return jsonify({'error': 'User not found'}), 404
         
     data = request.get_json()
     
+    # --- LOGIC TO CHANGE USERNAME ---
+    if 'username' in data:
+        new_username = data['username']
+        # Check if username is taken by SOMEONE ELSE
+        existing_user = User.query.filter_by(username=new_username).first()
+        if existing_user and existing_user.id != user.id:
+            return jsonify({'error': 'Username already taken'}), 400
+        
+        user.username = new_username
+    
     # Define which fields are allowed to be updated
     # (Security: Don't allow changing 'role', 'points', or 'is_verified' directly)
-    allowed_fields = ['organization_name', 'phone', 'profile_picture', 'business_type']
+    allowed_fields = ['organization_name', 'username', 'phone', 'email', 'full_name', 'profile_picture', 'business_type']
     
     changes_made = False
     
@@ -73,6 +83,9 @@ def update_user_profile():
             'message': 'Profile updated successfully!',
             'user': {
                 'organization_name': user.organization_name,
+                'username': user.username,
+                'full_name': user.organization_name,
+                'email': user.email,
                 'phone': user.phone,
                 'profile_picture': get_avatar_url(user)
             }
@@ -92,7 +105,7 @@ def get_user_history():
     update_expired_status()
 
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     results = {
         'active': [],   # For the "Live" tab
         'history': []   # For the "Past" tab (Claimed/Expired)
@@ -115,7 +128,7 @@ def get_user_history():
                 'quantity_remaining': d.quantity_kg,
                 'status': d.status, # 'available', 'partially_claimed', 'claimed', 'expired'
                 'created_at': d.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                'image_url': parent.image_url if parent else None,
+                'image_url': d.image_url,
                 'progress_percent': progress
             }
 
@@ -152,7 +165,7 @@ def get_user_history():
 @user_bp.route('/api/user/public-profile/<int:user_id>', methods=['GET'])
 @jwt_required()
 def get_public_profile(user_id):
-    user = User.query.get_or_404(user_id)
+    user = db.session.get(User, user_id)
     """
     Fetches the public reputation and active listings of a donor.
     Used when a user clicks on a donor's name in the feed.
@@ -235,7 +248,7 @@ def download_tax_certificate():
     Calculates total KG claimed from this Donor and certifies it.
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
 
     if user.role != 'donor':
         return jsonify({'error': 'Only Donors can generate tax certificates.'}), 403
@@ -319,7 +332,7 @@ def download_report():
     - Admins: System-wide overview.
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     # Create the in-memory string buffer
     si = io.StringIO()
@@ -353,7 +366,7 @@ def download_report():
                 # Scenario A: Items have been claimed (Partial or Full)
                 for c in claims:
                     # Fetch Rescuer Name safely
-                    rescuer = User.query.get(c.rescuer_id)
+                    rescuer = db.session.get(User, c.rescuer_id)
                     rescuer_name = rescuer.organization_name if rescuer else "Unknown Rescuer"
                     
                     # Calculate points for this specific claim transaction
@@ -459,7 +472,7 @@ def download_report():
 def get_donor_stats():
     """ DONOR DASHBOARD: Returns quick stats. """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     my_donations_count = Donation.query.filter_by(donor_id=current_user_id).count()
     
@@ -485,9 +498,8 @@ def get_recipient_stats():
     
     my_claims_count = Claim.query.filter_by(rescuer_id=current_user_id).count()
     
-    total_rescued = db.session.query(func.sum(Donation.quantity_kg))\
-        .join(Claim, Claim.donation_id == Donation.id)\
-        .filter(Claim.rescuer_id == current_user_id).scalar() or 0
+    total_rescued = db.session.query(func.sum(Claim.quantity_claimed))\
+    .filter(Claim.rescuer_id == current_user_id).scalar() or 0
 
     return jsonify({
         'total_claims': my_claims_count,
@@ -499,7 +511,7 @@ def get_recipient_stats():
 @jwt_required()
 def delete_own_account():
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     data = request.get_json()
     password = data.get('password')
@@ -549,7 +561,7 @@ def add_watchlist_item():
 def remove_watchlist_item(id):
     """ Stop watching. """
     current_user_id = get_jwt_identity()
-    item = Watchlist.query.get(id)
+    item = db.session.get(Watchlist, id)
     
     if not item or str(item.user_id) != str(current_user_id):
         return jsonify({'error': 'Not found or unauthorized'}), 404

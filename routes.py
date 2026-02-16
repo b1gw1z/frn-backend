@@ -192,7 +192,7 @@ def get_leaderboard():
 def get_admin_stats():
     """ Returns system-wide live metrics. """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     if not user or user.role != 'admin':
         return jsonify({'error': 'Admins only'}), 403
@@ -227,7 +227,7 @@ def get_all_users_detailed():
     Returns a list of all users, their roles, and status.
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     if user.role != 'admin': return jsonify({'error': 'Admins only'}), 403
 
     users = User.query.all()
@@ -256,7 +256,7 @@ def get_claims_log():
     Shows: Date | Rescuer | Donor | Food | Weight
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     if user.role != 'admin': return jsonify({'error': 'Admins only'}), 403
 
     # Join Claim -> Donation -> Donor & Rescuer
@@ -289,7 +289,7 @@ def get_pending_details():
     Shows users waiting for approval + registration date.
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     if user.role != 'admin': return jsonify({'error': 'Admins only'}), 403
 
     pending_users = User.query.filter_by(is_verified=False).all()
@@ -320,7 +320,7 @@ def get_food_breakdown():
     Example Output: {'Rice': 50, 'Beans': 20, 'Vegetables': 100}
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     if user.role != 'admin': return jsonify({'error': 'Admins only'}), 403
 
     # Magic SQL: Group by Food Type, Sum the Claimed Quantity
@@ -358,7 +358,7 @@ def get_food_breakdown():
 @jwt_required()
 def create_donation():
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
 
     # 1. Security Checks
     if not user.is_verified:
@@ -541,7 +541,7 @@ def claim_donation():
     """
     data = request.get_json()
     current_user_id = get_jwt_identity()
-    rescuer = User.query.get(current_user_id) # The person claiming (NGO)
+    rescuer = db.session.get(User, current_user_id) # The person claiming (NGO)
 
     # 1. Security & Validation
     if not rescuer.is_verified:
@@ -598,7 +598,7 @@ def claim_donation():
     try:
         # --- POINTS AWARDING LOGIC (The New Part) ---
         # Find the original Donor
-        donor = User.query.get(donation.donor_id)
+        donor = db.session.get(User, donation.donor_id)
         
         # Calculate Points (1kg = 10 Points)
         points_earned = int(claim_qty * 10)
@@ -711,7 +711,7 @@ def verify_user(user_id):
 @jwt_required()
 def get_user_history():
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     history = []
     
@@ -752,7 +752,7 @@ def download_report():
     - Admins: System-wide overview.
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     # Create the in-memory string buffer
     si = io.StringIO()
@@ -786,7 +786,7 @@ def download_report():
                 # Scenario A: Items have been claimed (Partial or Full)
                 for c in claims:
                     # Fetch Rescuer Name safely
-                    rescuer = User.query.get(c.rescuer_id)
+                    rescuer = db.session.get(User, c.rescuer_id)
                     rescuer_name = rescuer.organization_name if rescuer else "Unknown Rescuer"
                     
                     # Calculate points for this specific claim transaction
@@ -933,7 +933,7 @@ def get_messages(donation_id):
 def get_donor_stats():
     """ DONOR DASHBOARD: Returns quick stats. """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     my_donations_count = Donation.query.filter_by(donor_id=current_user_id).count()
     
@@ -979,7 +979,7 @@ def get_recipient_stats():
 def get_user_profile():
     """ Refreshes user data on page reload. """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     if not user:
         return jsonify({'error': 'User not found'}), 404
@@ -1108,7 +1108,7 @@ def forgot_password():
 @jwt_required()
 def delete_own_account():
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     data = request.get_json()
     password = data.get('password')
@@ -1293,7 +1293,7 @@ def download_tax_certificate():
     Calculates total KG claimed from this Donor and certifies it.
     """
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
 
     if user.role != 'donor':
         return jsonify({'error': 'Only Donors can generate tax certificates.'}), 403
@@ -1450,7 +1450,7 @@ def get_user_history():
     update_expired_status()
 
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     results = {
         'active': [],   # For the "Live" tab
         'history': []   # For the "Past" tab (Claimed/Expired)
@@ -1473,7 +1473,7 @@ def get_user_history():
                 'quantity_remaining': d.quantity_kg,
                 'status': d.status, # 'available', 'partially_claimed', 'claimed', 'expired'
                 'created_at': d.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                'image_url': parent.image_url if parent else None,
+                'image_url': d.image_url,
                 'progress_percent': progress
             }
 
@@ -1522,7 +1522,7 @@ def register_individual():
         business_type='individual',
         role='individual',
         location=data['location'],
-        phone_number=data['phone'],
+        phone=data['phone'],
         is_verified=False 
     )
     new_user.set_password(data['password'])

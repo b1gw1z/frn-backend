@@ -56,7 +56,7 @@ def report_donation():
 @jwt_required()
 def get_reports():
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, current_user_id)
     
     if user.role != 'admin':
         return jsonify({'error': 'Unauthorized'}), 403

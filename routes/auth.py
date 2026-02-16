@@ -7,6 +7,7 @@ from utils import send_verification_email, get_avatar_url
 from flask_mail import Message
 from extensions import mail # Import mail from main app
 from unittest.mock import patch
+import uuid
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -72,15 +73,22 @@ def register_individual():
     # Validation
     if User.query.filter_by(email=data['email']).first():
         return jsonify({'error': 'Email already exists'}), 400
+    
+    # Generate a username like "john.doe" from "john.doe@email.com"
+    base_username = data['email'].split('@')[0]
+    # Generate a unique "IND" (Individual) ID to satisfy the DB constraint
+    gen_reg_number = f"IND-{uuid.uuid4().hex[:8].upper()}"
 
     # Create User (Storing "John Doe" in 'organization_name')
     new_user = User(
         email=data['email'],
-        organization_name=data['full_name'], # <--- This works perfectly!
+        username=base_username,
+        organization_name=data['full_name'],
+        registration_number=gen_reg_number,# <--- This works perfectly!
         business_type='individual',
         role='individual',
         location=data['location'],
-        phone_number=data['phone'],
+        phone=data['phone'],
         is_verified=False 
     )
     new_user.set_password(data['password'])
@@ -89,12 +97,20 @@ def register_individual():
         db.session.add(new_user)
         db.session.commit()
         
-        # Send the Email
-        send_verification_email(new_user)
+        # Send Verification Email (Wrapped in try/except so it doesn't crash registration)
+        try:
+            send_verification_email(new_user)
+        except Exception as e:
+            print(f"Email failed: {e}") 
         
         return jsonify({
-            'message': 'Registration successful! Check your email to verify account.'
+            'message': 'Registration successful! Check your email.',
+            'username': base_username # Let the frontend know their new username
         }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
     except Exception as e:
         db.session.rollback()
